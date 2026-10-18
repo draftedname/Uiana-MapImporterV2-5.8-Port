@@ -10,7 +10,7 @@
  * 
  */
 class AActor;
-class UUEFModelFactory;
+class UEFModelFactory;
 class USCS_Node;
 class UBrushComponent;
 
@@ -49,5 +49,8 @@ public:
 		static void ExecuteConsoleCommand(FString ConsoleCommand);
 	UFUNCTION(BlueprintCallable, Category = ProjectSettings)
 		static UObject* SetMeshReference(FString MeshObjectName, FString MeshType);
+
+	UFUNCTION(BlueprintCallable, Category = "Uiana")
+	static bool ImportValorantMap(FString MapName, FString PaksFolder, FString ExportFolder, bool bImportMeshes = true, bool bImportMaterials = true, bool bImportLights = true, bool bImportDecals = true);
 
 };

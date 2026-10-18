@@ -23,7 +23,7 @@
 #include "HAL/FileManager.h"
 #include "Interfaces/IPluginManager.h"
 #include "Kismet/GameplayStatics.h"
-#include "Materials/MaterialEditingLibrary.h"
+#include "MaterialEditingLibrary.h"
 #include "Materials/MaterialInstanceConstant.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
@@ -95,6 +95,7 @@ namespace
 			return false;
 		}
 
+		UE_LOG(LogTemp, Log, TEXT("Uiana: launching tool: %s %s"), *ExecutablePath, *Args);
 		FProcHandle Proc = FPlatformProcess::CreateProc(*ExecutablePath, *Args, true, false, false, nullptr, 0, nullptr, nullptr);
 		if (!Proc.IsValid())
 		{
@@ -110,7 +111,7 @@ namespace
 		{
 			UE_LOG(LogTemp, Warning, TEXT("Uiana: tool returned %d: %s %s"), ReturnCode, *ExecutablePath, *Args);
 		}
-		return true;
+		return ReturnCode == 0;
 	}
 
 	bool ReadJsonArray(const FString& FilePath, TArray<TSharedPtr<FJsonValue>>& OutArray)
@@ -193,26 +194,92 @@ namespace
 		return InObjectPath;
 	}
 
+	FString ExtractCleanObjectName(const FString& InRaw)
+	{
+		FString Str = InRaw.TrimStartAndEnd();
+		if (Str.IsEmpty())
+		{
+			return FString();
+		}
+
+		// 1. If wrapped in single quotes, e.g. Class'Name' or 'Name'
+		int32 FirstQuote = INDEX_NONE;
+		int32 LastQuote = INDEX_NONE;
+		if (Str.FindChar(TEXT('\''), FirstQuote) && Str.FindLastChar(TEXT('\''), LastQuote) && LastQuote > FirstQuote)
+		{
+			Str = Str.Mid(FirstQuote + 1, LastQuote - FirstQuote - 1);
+		}
+		else
+		{
+			// 2. If space separated, e.g. "Class Name"
+			int32 SpaceIdx = INDEX_NONE;
+			if (Str.FindLastChar(TEXT(' '), SpaceIdx))
+			{
+				Str = Str.Mid(SpaceIdx + 1);
+			}
+		}
+
+		// 3. If it looks like a path or package.export, e.g. /Game/.../MyAsset.0 or /Game/.../MyAsset.MyAsset
+		int32 DotIdx = INDEX_NONE;
+		if (Str.FindLastChar(TEXT('.'), DotIdx))
+		{
+			const FString AfterDot = Str.Mid(DotIdx + 1);
+			if (AfterDot.IsNumeric())
+			{
+				Str = Str.Left(DotIdx);
+			}
+			else
+			{
+				Str = AfterDot;
+			}
+		}
+
+		// 4. Base filename if it contains slashes (/ or \)
+		Str = FPaths::GetBaseFilename(Str);
+
+		// 5. Subobject colon, e.g. Outer:SubObject
+		int32 ColonIdx = INDEX_NONE;
+		if (Str.FindLastChar(TEXT(':'), ColonIdx))
+		{
+			Str = Str.Mid(ColonIdx + 1);
+		}
+
+		return Str;
+	}
+
+	FString GetRefName(const TSharedPtr<FJsonObject>& RefObj)
+	{
+		if (!RefObj.IsValid())
+		{
+			return FString();
+		}
+
+		FString Name;
+		if (RefObj->TryGetStringField(TEXT("ObjectName"), Name) && !Name.IsEmpty())
+		{
+			const FString Clean = ExtractCleanObjectName(Name);
+			if (!Clean.IsEmpty())
+			{
+				return Clean;
+			}
+		}
+
+		if (RefObj->TryGetStringField(TEXT("ObjectPath"), Name) && !Name.IsEmpty())
+		{
+			return ExtractCleanObjectName(Name);
+		}
+
+		return FString();
+	}
+
 	FString ObjectNameFromPath(const FString& ObjectPath)
 	{
-		const FString Sanitized = ObjectPath.Replace(TEXT("'"), TEXT(""));
-		FString Left;
-		FString Right;
-		if (Sanitized.Split(TEXT("."), &Left, &Right, ESearchCase::IgnoreCase, ESearchDir::FromEnd))
-		{
-			return Right;
-		}
-		return FPaths::GetBaseFilename(Sanitized);
+		return ExtractCleanObjectName(ObjectPath);
 	}
 
 	FString ObjectNameFromObjectNameField(const FString& ObjectNameField)
 	{
-		int32 SpaceIdx = INDEX_NONE;
-		if (ObjectNameField.FindLastChar(TEXT(' '), SpaceIdx))
-		{
-			return ObjectNameField.Mid(SpaceIdx + 1);
-		}
-		return ObjectNameField;
+		return ExtractCleanObjectName(ObjectNameField);
 	}
 
 	FString PathConvert(const FString& InPath)
@@ -293,8 +360,8 @@ namespace
 			return nullptr;
 		}
 
-		const FString ObjectName = ObjectNameFromObjectNameField(MaterialRef->GetStringField(TEXT("ObjectName")));
-		if (ObjectName.Contains(TEXT("MaterialInstanceDynamic")))
+		const FString ObjectName = GetRefName(MaterialRef);
+		if (ObjectName.IsEmpty() || ObjectName.Contains(TEXT("MaterialInstanceDynamic")))
 		{
 			return nullptr;
 		}
@@ -494,27 +561,31 @@ namespace
 
 	bool ExtractData(const FUianaImportConfig& Config, const FString& ExportDirectory, const FString& AssetListFile)
 	{
+		const FString LogFilePath = FPaths::Combine(Config.ExportRoot, TEXT("cue4extractor.log"));
 		const FString Args = FString::Printf(
-			TEXT("--game-directory \"%s\" --aes-key %s --export-directory \"%s\" --map-name \"%s\" --file-list \"%s\" --game-umaps \"%s\""),
+			TEXT("--game-directory \"%s\" --aes-key %s --export-directory \"%s\" --map-name \"%s\" --file-list \"%s\" --game-umaps \"%s\" --log-file \"%s\""),
 			*Config.PaksRoot,
 			*Config.AESKey,
 			*ExportDirectory,
 			*Config.MapName,
 			*AssetListFile,
-			*Config.UMapsListPath());
+			*Config.UMapsListPath(),
+			*LogFilePath);
 		return RunExternalTool(Config.Cue4ExtractorPath(), Args);
 	}
 
 	bool ExtractAssets(const FUianaImportConfig& Config, const FMapPaths& Paths)
 	{
 		const FString AssetObjects = FPaths::Combine(Paths.Root, TEXT("all_assets.txt"));
+		const FString LogFilePath = FPaths::Combine(Config.ExportRoot, TEXT("cue4extractor.log"));
 		const FString Args = FString::Printf(
-			TEXT("--game-directory \"%s\" --aes-key %s --export-directory \"%s\" --file-list \"%s\" --game-umaps \"%s\" --export-assets"),
+			TEXT("--game-directory \"%s\" --aes-key %s --export-directory \"%s\" --file-list \"%s\" --game-umaps \"%s\" --export-assets --log-file \"%s\""),
 			*Config.PaksRoot,
 			*Config.AESKey,
 			*Config.AssetsRoot(),
 			*AssetObjects,
-			*Config.UMapsListPath());
+			*Config.UMapsListPath(),
+			*LogFilePath);
 		return RunExternalTool(Config.Cue4ExtractorPath(), Args);
 	}
 
@@ -565,10 +636,18 @@ namespace
 			}
 
 			const FString ObjectPath = (*ParameterValueObj)->GetStringField(TEXT("ObjectPath"));
-			const FString NoExt = ObjectPath.LeftChop(4); // ".xxx"
+			FString NoExt = ObjectPath;
+			int32 DotIndex = INDEX_NONE;
+			if (NoExt.FindChar(TEXT('.'), DotIndex))
+			{
+				NoExt = NoExt.Left(DotIndex);
+			}
 			const FString Relative = PathConvert(NoExt.Replace(TEXT("/"), TEXT("\\"))).Replace(TEXT("'"), TEXT("")) + Config.TextureFormat;
 			const FString LocalPath = FPaths::Combine(Config.AssetsRoot(), Relative);
-			InOutTextures.Add(LocalPath);
+			if (FPaths::FileExists(LocalPath))
+			{
+				InOutTextures.Add(LocalPath);
+			}
 		}
 	}
 
@@ -619,7 +698,11 @@ namespace
 			const TSharedPtr<FJsonObject>* ParentObj = nullptr;
 			if ((*Props)->TryGetObjectField(TEXT("Parent"), ParentObj) && ParentObj && (*ParentObj).IsValid())
 			{
-				ParentName = ObjectNameFromObjectNameField((*ParentObj)->GetStringField(TEXT("ObjectName")));
+				ParentName = GetRefName(*ParentObj);
+				if (ParentName.IsEmpty())
+				{
+					ParentName = TEXT("BaseEnv_MAT_V4");
+				}
 			}
 			const FString ParentPath = FString::Printf(TEXT("/Uiana/Materials/%s.%s"), *ParentName, *ParentName);
 			if (UMaterialInterface* ParentMat = Cast<UMaterialInterface>(StaticLoadObject(UMaterialInterface::StaticClass(), nullptr, *ParentPath)))
@@ -690,7 +773,7 @@ namespace
 						continue;
 					}
 
-					const FString TextureName = ObjectNameFromPath((*ParamValue)->GetStringField(TEXT("ObjectPath")));
+					const FString TextureName = GetRefName(*ParamValue);
 					const FString TexturePath = FString::Printf(TEXT("/Game/ValorantContent/Textures/%s.%s"), *TextureName, *TextureName);
 					if (UTexture* Texture = Cast<UTexture>(StaticLoadObject(UTexture::StaticClass(), nullptr, *TexturePath)))
 					{
@@ -703,6 +786,7 @@ namespace
 			UMaterialEditingLibrary::UpdateMaterialInstance(MIC);
 
 			UPackage* Package = MIC->GetOutermost();
+			Package->FullyLoad();
 			FSavePackageArgs SaveArgs;
 			const FString Filename = FPackageName::LongPackageNameToFilename(Package->GetName(), FPackageName::GetAssetPackageExtension());
 			UPackage::SavePackage(Package, MIC, *Filename, SaveArgs);
@@ -738,7 +822,21 @@ namespace
 				continue;
 			}
 
-			const FString OuterName = Obj->GetStringField(TEXT("Outer"));
+			FString OuterName;
+			const TSharedPtr<FJsonObject>* OuterObj = nullptr;
+			if (Obj->TryGetObjectField(TEXT("Outer"), OuterObj) && OuterObj && (*OuterObj).IsValid())
+			{
+				OuterName = GetRefName(*OuterObj);
+			}
+			else
+			{
+				OuterName = ExtractCleanObjectName(Obj->GetStringField(TEXT("Outer")));
+			}
+			if (OuterName.IsEmpty())
+			{
+				OuterName = Obj->GetStringField(TEXT("Name"));
+			}
+
 			FTransform Transform;
 			if (!ParseTransform(*Props, Transform))
 			{
@@ -753,7 +851,7 @@ namespace
 					continue;
 				}
 
-				const FString MeshName = ObjectNameFromPath((*StaticMesh)->GetStringField(TEXT("ObjectPath")));
+				const FString MeshName = GetRefName(*StaticMesh);
 				const FString MeshAssetPath = FString::Printf(TEXT("/Game/ValorantContent/Meshes/%s.%s"), *MeshName, *MeshName);
 				UStaticMesh* LoadedMesh = Cast<UStaticMesh>(StaticLoadObject(UStaticMesh::StaticClass(), nullptr, *MeshAssetPath));
 				if (!LoadedMesh)
@@ -788,8 +886,15 @@ namespace
 							const TSharedPtr<FJsonObject>* Scale3D = nullptr;
 							const TSharedPtr<FJsonObject>* RotationQuat = nullptr;
 							if (!(*TransformData)->TryGetObjectField(TEXT("Translation"), Translation) ||
-								!(*TransformData)->TryGetObjectField(TEXT("Scale3D"), Scale3D) ||
-								!(*TransformData)->TryGetObjectField(TEXT("Rotation"), RotationQuat))
+								!(*TransformData)->TryGetObjectField(TEXT("Scale3D"), Scale3D))
+							{
+								continue;
+							}
+							if (!(*TransformData)->TryGetObjectField(TEXT("Rotation"), RotationQuat) || !RotationQuat || !(*RotationQuat).IsValid())
+							{
+								(*TransformData)->TryGetObjectField(TEXT("RotationQuat"), RotationQuat);
+							}
+							if (!RotationQuat || !(*RotationQuat).IsValid())
 							{
 								continue;
 							}
@@ -803,6 +908,21 @@ namespace
 								(*RotationQuat)->GetNumberField(TEXT("W")));
 
 							Actor->HismComponent->AddInstance(FTransform(Quat, Loc, Scale));
+						}
+					}
+
+					const TArray<TSharedPtr<FJsonValue>>* OverrideMaterials = nullptr;
+					if (Config.bImportMaterials && (*Props)->TryGetArrayField(TEXT("OverrideMaterials"), OverrideMaterials) && OverrideMaterials)
+					{
+						int32 MatIdx = 0;
+						for (const TSharedPtr<FJsonValue>& MatValue : *OverrideMaterials)
+						{
+							UMaterialInterface* Mat = LoadMaterialFromRef(MatValue->AsObject());
+							if (Mat)
+							{
+								Actor->HismComponent->SetMaterial(MatIdx, Mat);
+							}
+							MatIdx++;
 						}
 					}
 				}
@@ -820,12 +940,16 @@ namespace
 					const TArray<TSharedPtr<FJsonValue>>* OverrideMaterials = nullptr;
 					if (Config.bImportMaterials && (*Props)->TryGetArrayField(TEXT("OverrideMaterials"), OverrideMaterials) && OverrideMaterials)
 					{
-						TArray<UMaterialInterface*> Materials;
+						int32 MatIdx = 0;
 						for (const TSharedPtr<FJsonValue>& MatValue : *OverrideMaterials)
 						{
-							Materials.Add(LoadMaterialFromRef(MatValue->AsObject()));
+							UMaterialInterface* Mat = LoadMaterialFromRef(MatValue->AsObject());
+							if (Mat)
+							{
+								Actor->GetStaticMeshComponent()->SetMaterial(MatIdx, Mat);
+							}
+							MatIdx++;
 						}
-						Actor->GetStaticMeshComponent()->SetOverrideMaterials(Materials);
 					}
 				}
 				continue;
@@ -1072,7 +1196,11 @@ namespace
 
 bool FUianaImporter::BuildConfig(const UUianaDataSettings& Settings, FUianaImportConfig& OutConfig)
 {
-	const UEnum* MapEnum = StaticEnum<WeaponRole>();
+	const UEnum* MapEnum = FindObject<UEnum>(nullptr, TEXT("/Script/Uiana.WeaponRole"));
+	if (!MapEnum)
+	{
+		MapEnum = FindFirstObject<UEnum>(TEXT("WeaponRole"), EFindFirstObjectOptions::None);
+	}
 	if (!MapEnum)
 	{
 		return false;

@@ -20,5 +20,19 @@
             "Type": "Editor",
             "LoadingPhase": "Default"
         }
+    ],
+    "Plugins": [
+        {
+            "Name": "UEFormat",
+            "Enabled": true
+        },
+        {
+            "Name": "ProceduralMeshComponent",
+            "Enabled": true
+        },
+        {
+            "Name": "EditorScriptingUtilities",
+            "Enabled": true
+        }
     ]
 }

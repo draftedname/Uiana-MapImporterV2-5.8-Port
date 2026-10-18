@@ -25,6 +25,8 @@
 #include "Factories/UEFModelFactory.h"
 #include "StaticMeshComponentLODInfo.h"
 #include "UObject/SavePackage.h"
+#include "UianaDataSettings.h"
+#include "UianaImporter.h"
 
 
 UActorComponent* UBPFL::GetComponentByName(AActor* Actor, FName CompName)
@@ -176,7 +178,7 @@ void UBPFL::ChangeProjectSettings()
 	URendererSettings* Settings = GetMutableDefault<URendererSettings>();
 	Settings->DefaultLightUnits = ELightUnits::Unitless;
 	Settings->DynamicGlobalIllumination = EDynamicGlobalIlluminationMethod::None;
-	Settings->Reflections == EReflectionMethod::None;
+	Settings->Reflections = EReflectionMethod::None;
 	Settings->SaveConfig();
 }
 UActorComponent* UBPFL::GetComponent(AActor* Actor)
@@ -215,6 +217,10 @@ void UBPFL::ImportTextures(TArray<FString> AllTexturesPath)
 	auto ActorIdx = -1;
 	for (auto tx : AllTexturesPath)
 	{
+		if (!FPaths::FileExists(tx))
+		{
+			continue;
+		}
 		ActorIdx++;
 		FString TexGamePath, TexName;
 		tx.Split(TEXT("\\"), &TexGamePath, &TexName, ESearchCase::IgnoreCase, ESearchDir::FromEnd);
@@ -260,8 +266,8 @@ void UBPFL::ImportMeshes(TArray<FString> AllMeshesPath, FString ObjectsPath)
 {
 	auto AutomatedData = NewObject<UAutomatedAssetImportData>();
 	AutomatedData->bReplaceExisting = false;
-	auto UEFModelFactory = NewObject<UUEFModelFactory>();
-	UEFModelFactory->AutomatedImportData = AutomatedData;
+	auto ModelFactory = NewObject<UEFModelFactory>();
+	ModelFactory->AutomatedImportData = AutomatedData;
 	FScopedSlowTask ImportTask(AllMeshesPath.Num(), FText::FromString("Importing Meshes"));
 	ImportTask.MakeDialog(true); 
 	int ActorIdx = -1;
@@ -272,17 +278,23 @@ void UBPFL::ImportMeshes(TArray<FString> AllMeshesPath, FString ObjectsPath)
 		ActorIdx++;
 		MeshName = MeshName.Replace(TEXT(".uemodel"), TEXT(""));
 		FString PathForMeshes = FString::Printf(TEXT("/Game/ValorantContent/Meshes/%s"), *MeshName);
+		const FString PackageFileName = FPackageName::LongPackageNameToFilename(PathForMeshes, FPackageName::GetAssetPackageExtension());
+		if (FPaths::FileExists(PackageFileName))
+		{
+			continue;
+		}
+
 		auto MeshPackage = CreatePackage(*PathForMeshes);
+		MeshPackage->FullyLoad();
 		auto bCancelled = false;
-		auto CreatedMesh = UEFModelFactory->FactoryCreateFile(UStaticMesh::StaticClass(), MeshPackage, FName(*MeshName), RF_Public | RF_Standalone, MPath, NULL, GWarn, bCancelled);
+		auto CreatedMesh = ModelFactory->FactoryCreateFile(UStaticMesh::StaticClass(), MeshPackage, FName(*MeshName), RF_Public | RF_Standalone, MPath, NULL, GWarn, bCancelled);
 		if (CreatedMesh == nullptr)
 		{
 			continue;
 		}
 		FAssetRegistryModule::AssetCreated(CreatedMesh);
 		FSavePackageArgs SaveArgs;
-		const FString PackageFileName = FPackageName::LongPackageNameToFilename(MeshPackage->GetName(), FPackageName::GetAssetPackageExtension());
-		UPackage::SavePackage(MeshPackage, nullptr, *PackageFileName, SaveArgs);
+		UPackage::SavePackage(MeshPackage, CreatedMesh, *PackageFileName, SaveArgs);
 		ImportTask.DefaultMessage = FText::FromString(FString::Printf(TEXT("Importing Mesh : %d of %d: %s"), ActorIdx + 1, AllMeshesPath.Num() + 1, *MeshName));
 		ImportTask.EnterProgressFrame();
 	}
@@ -312,3 +324,34 @@ ECollisionTraceFlag UBPFL::GetTraceFlag(FString tflag)
 	}
 	return CTF_UseSimpleAsComplex;
 }
+
+bool UBPFL::ImportValorantMap(FString MapName, FString PaksFolder, FString ExportFolder, bool bImportMeshes, bool bImportMaterials, bool bImportLights, bool bImportDecals)
+{
+	UUianaDataSettings* Settings = NewObject<UUianaDataSettings>();
+	Settings->ExportFolder.Path = ExportFolder;
+	Settings->PaksFolder.Path = PaksFolder;
+	Settings->ImportMeshes = bImportMeshes;
+	Settings->ImportMaterials = bImportMaterials;
+	Settings->ImportLights = bImportLights;
+	Settings->ImportDecals = bImportDecals;
+	Settings->ImportBlueprints = false;
+	Settings->UseSubLevels = true;
+	Settings->LightmapResolutionMultiplier = 1.0f;
+
+	const UEnum* MapEnum = FindObject<UEnum>(nullptr, TEXT("/Script/Uiana.WeaponRole"));
+	if (!MapEnum)
+	{
+		MapEnum = FindFirstObject<UEnum>(TEXT("WeaponRole"), EFindFirstObjectOptions::None);
+	}
+	if (MapEnum)
+	{
+		int64 Val = MapEnum->GetValueByNameString(MapName);
+		if (Val != INDEX_NONE)
+		{
+			Settings->Map = static_cast<WeaponRole>(Val);
+		}
+	}
+
+	return FUianaImporter::Run(*Settings);
+}
+

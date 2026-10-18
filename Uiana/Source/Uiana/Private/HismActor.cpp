@@ -13,6 +13,7 @@
 AHismActor::AHismActor()
 {
 	HismComponent = CreateDefaultSubobject<UHierarchicalInstancedStaticMeshComponent>(TEXT("InstancedStaticMeshComponent0"));
+	SetRootComponent(HismComponent);
 	HismComponent->SetCollisionProfileName(UCollisionProfile::BlockAll_ProfileName);
 	HismComponent->Mobility = EComponentMobility::Static;
 	HismComponent->SetGenerateOverlapEvents(false);
