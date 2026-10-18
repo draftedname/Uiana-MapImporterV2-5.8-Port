@@ -155,11 +155,35 @@
   "abilitydraft": [
     "/Game/Maps/AbilityDraft/AbilityDraft"
   ],
-  "Character Select": [
-    "ShooterGame/Content/Maps/PregameV2/CharacterSelectPersistentLevel"
-  ],
   "Menu": [
     "/Game/Maps/Menu/MainMenuV2"
+  ],
+  "PregameV2": [
+    "/Game/Maps/PregameV2/CharacterSelectPersistentLevel"
+  ],
+  "Pitt_Copy": [
+    "/Game/Maps/Pitt_Copy/Pitt_Live_Update_6"
+  ],
+  "Jam_Copy": [
+    "/Game/Maps/Jam_Copy/Jam_Copy_V4_09"
+  ],
+  "Foxtrot_Copy": [
+    "/Game/Maps/Foxtrot_Copy/Foxtrot_Update_2025"
+  ],
+  "Init": [
+    "/Game/Maps/Init/Init"
+  ],
+  "Duel": [
+    "/Game/Maps/Duel/Duel_Layout_Platform"
+  ],
+  "HURM": [
+    "/Game/Maps/HURM/HURM_Alley/HURM_Alley_Greybox_Reference"
+  ],
+  "SharedSubLevels": [
+    "/Game/Maps/SharedSubLevels/AuxiliaryZones/AuxiliaryZones"
+  ],
+  "Character Select": [
+    "ShooterGame/Content/Maps/PregameV2/CharacterSelectPersistentLevel"
   ],
   "Range": [
     "/Game/Maps/Poveglia/Range"

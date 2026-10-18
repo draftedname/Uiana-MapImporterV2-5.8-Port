@@ -23,6 +23,8 @@
 #include "Engine/SpotLight.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/StaticMeshActor.h"
+#include "Engine/PostProcessVolume.h"
+#include "EngineUtils.h"
 #include "Engine/Blueprint.h"
 #include "Editor.h"
 #include "Factories/MaterialInstanceConstantFactoryNew.h"
@@ -841,6 +843,11 @@ namespace
 		}
 	}
 
+	bool IsSuperGridMesh(const FString& MeshName)
+	{
+		return MeshName.StartsWith(TEXT("SuperGrid_"), ESearchCase::IgnoreCase);
+	}
+
 	void ImportMapActors(const FString& UMapJsonPath, const FUianaImportConfig& Config)
 	{
 		UWorld* World = GEditor ? GEditor->GetEditorWorldContext().World() : nullptr;
@@ -855,8 +862,69 @@ namespace
 			return;
 		}
 
-		for (const TSharedPtr<FJsonValue>& Value : JsonArray)
+		TArray<FTransform> ResolvedTransforms;
+		TArray<bool> ResolvedFlags;
+		ResolvedTransforms.SetNum(JsonArray.Num());
+		ResolvedFlags.Init(false, JsonArray.Num());
+
+		auto ResolveWorldTransform = [&](auto& Self, int32 Index, int32 Depth) -> FTransform
 		{
+			if (Depth > 16 || !JsonArray.IsValidIndex(Index))
+			{
+				return FTransform::Identity;
+			}
+			if (ResolvedFlags[Index])
+			{
+				return ResolvedTransforms[Index];
+			}
+
+			FTransform LocalTransform = FTransform::Identity;
+			const TSharedPtr<FJsonObject> ItemObj = JsonArray[Index]->AsObject();
+			if (ItemObj.IsValid())
+			{
+				const TSharedPtr<FJsonObject>* ItemProps = nullptr;
+				if (ItemObj->TryGetObjectField(TEXT("Properties"), ItemProps) && ItemProps && (*ItemProps).IsValid())
+				{
+					ParseTransform(*ItemProps, LocalTransform);
+
+					const TSharedPtr<FJsonObject>* AttachParentObj = nullptr;
+					if ((*ItemProps)->TryGetObjectField(TEXT("AttachParent"), AttachParentObj) && AttachParentObj && (*AttachParentObj).IsValid())
+					{
+						FString ObjectPath;
+						if ((*AttachParentObj)->TryGetStringField(TEXT("ObjectPath"), ObjectPath))
+						{
+							int32 DotIndex = INDEX_NONE;
+							if (ObjectPath.FindLastChar(TEXT('.'), DotIndex) && DotIndex != INDEX_NONE)
+							{
+								const FString IndexStr = ObjectPath.Mid(DotIndex + 1);
+								if (IndexStr.IsNumeric())
+								{
+									const int32 ParentIdx = FCString::Atoi(*IndexStr);
+									if (ParentIdx != Index && JsonArray.IsValidIndex(ParentIdx))
+									{
+										const FTransform ParentWorld = Self(Self, ParentIdx, Depth + 1);
+										LocalTransform = LocalTransform * ParentWorld;
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+
+			ResolvedTransforms[Index] = LocalTransform;
+			ResolvedFlags[Index] = true;
+			return LocalTransform;
+		};
+
+		for (int32 Idx = 0; Idx < JsonArray.Num(); ++Idx)
+		{
+			ResolveWorldTransform(ResolveWorldTransform, Idx, 0);
+		}
+
+		for (int32 ItemIdx = 0; ItemIdx < JsonArray.Num(); ++ItemIdx)
+		{
+			const TSharedPtr<FJsonValue>& Value = JsonArray[ItemIdx];
 			const TSharedPtr<FJsonObject> Obj = Value->AsObject();
 			if (!Obj.IsValid())
 			{
@@ -885,11 +953,7 @@ namespace
 				OuterName = Obj->GetStringField(TEXT("Name"));
 			}
 
-			FTransform Transform;
-			if (!ParseTransform(*Props, Transform))
-			{
-				Transform = FTransform::Identity;
-			}
+			const FTransform Transform = ResolvedTransforms[ItemIdx];
 
 			if (Config.bImportMeshes && (Type == TEXT("StaticMeshComponent") || Type == TEXT("InstancedStaticMeshComponent") || Type == TEXT("HierarchicalInstancedStaticMeshComponent")))
 			{
@@ -907,6 +971,7 @@ namespace
 					continue;
 				}
 
+				const bool bIsSuperGrid = IsSuperGridMesh(MeshName);
 				if (Type.Contains(TEXT("Instanced")))
 				{
 					AHismActor* Actor = World->SpawnActor<AHismActor>(AHismActor::StaticClass(), Transform);
@@ -915,7 +980,21 @@ namespace
 						continue;
 					}
 					Actor->SetActorLabel(OuterName);
-					Actor->SetFolderPath(TEXT("Meshes/Instanced"));
+					if (bIsSuperGrid)
+					{
+						Actor->SetFolderPath(TEXT("Collision/SuperGrid"));
+						Actor->SetActorHiddenInGame(true);
+						Actor->HismComponent->SetVisibility(false, true);
+						Actor->HismComponent->SetHiddenInGame(true);
+						Actor->HismComponent->SetCastShadow(false);
+						Actor->HismComponent->bCastHiddenShadow = false;
+						Actor->HismComponent->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+						Actor->HismComponent->SetCollisionProfileName(UCollisionProfile::BlockAll_ProfileName);
+					}
+					else
+					{
+						Actor->SetFolderPath(TEXT("Meshes/Instanced"));
+					}
 					Actor->HismComponent->SetStaticMesh(LoadedMesh);
 					Actor->HismComponent->SetMobility(EComponentMobility::Static);
 
@@ -981,6 +1060,31 @@ namespace
 							MatIdx++;
 						}
 					}
+
+					if (Config.bImportMaterials)
+					{
+						const TArray<FStaticMaterial>& StaticMats = LoadedMesh->GetStaticMaterials();
+						for (int32 SlotIdx = 0; SlotIdx < StaticMats.Num(); ++SlotIdx)
+						{
+							if (!Actor->HismComponent->GetMaterial(SlotIdx))
+							{
+								if (LoadedMesh->GetMaterial(SlotIdx))
+								{
+									Actor->HismComponent->SetMaterial(SlotIdx, LoadedMesh->GetMaterial(SlotIdx));
+								}
+								else
+								{
+									const FString SlotName = StaticMats[SlotIdx].MaterialSlotName.ToString();
+									const FString MatPath = FString::Printf(TEXT("/Game/ValorantContent/Materials/%s.%s"), *SlotName, *SlotName);
+									if (UMaterialInterface* FallbackMat = Cast<UMaterialInterface>(StaticLoadObject(UMaterialInterface::StaticClass(), nullptr, *MatPath)))
+									{
+										Actor->HismComponent->SetMaterial(SlotIdx, FallbackMat);
+										LoadedMesh->SetMaterial(SlotIdx, FallbackMat);
+									}
+								}
+							}
+						}
+					}
 				}
 				else
 				{
@@ -990,8 +1094,22 @@ namespace
 						continue;
 					}
 					Actor->SetActorLabel(OuterName);
-					Actor->SetFolderPath(UMapJsonPath.Contains(TEXT("_VFX")) ? TEXT("Meshes/VFX") : TEXT("Meshes/Static"));
 					UStaticMeshComponent* SMC = Actor->GetStaticMeshComponent();
+					if (bIsSuperGrid)
+					{
+						Actor->SetFolderPath(TEXT("Collision/SuperGrid"));
+						Actor->SetActorHiddenInGame(true);
+						SMC->SetVisibility(false, true);
+						SMC->SetHiddenInGame(true);
+						SMC->SetCastShadow(false);
+						SMC->bCastHiddenShadow = false;
+						SMC->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+						SMC->SetCollisionProfileName(UCollisionProfile::BlockAll_ProfileName);
+					}
+					else
+					{
+						Actor->SetFolderPath(UMapJsonPath.Contains(TEXT("_VFX")) ? TEXT("Meshes/VFX") : TEXT("Meshes/Static"));
+					}
 					SMC->SetStaticMesh(LoadedMesh);
 					SMC->SetMobility(EComponentMobility::Static);
 
@@ -1016,6 +1134,31 @@ namespace
 							MatIdx++;
 						}
 					}
+
+					if (Config.bImportMaterials)
+					{
+						const TArray<FStaticMaterial>& StaticMats = LoadedMesh->GetStaticMaterials();
+						for (int32 SlotIdx = 0; SlotIdx < StaticMats.Num(); ++SlotIdx)
+						{
+							if (!SMC->GetMaterial(SlotIdx))
+							{
+								if (LoadedMesh->GetMaterial(SlotIdx))
+								{
+									SMC->SetMaterial(SlotIdx, LoadedMesh->GetMaterial(SlotIdx));
+								}
+								else
+								{
+									const FString SlotName = StaticMats[SlotIdx].MaterialSlotName.ToString();
+									const FString MatPath = FString::Printf(TEXT("/Game/ValorantContent/Materials/%s.%s"), *SlotName, *SlotName);
+									if (UMaterialInterface* FallbackMat = Cast<UMaterialInterface>(StaticLoadObject(UMaterialInterface::StaticClass(), nullptr, *MatPath)))
+									{
+										SMC->SetMaterial(SlotIdx, FallbackMat);
+										LoadedMesh->SetMaterial(SlotIdx, FallbackMat);
+									}
+								}
+							}
+						}
+					}
 				}
 				continue;
 			}
@@ -1029,6 +1172,15 @@ namespace
 				}
 				Decal->SetActorLabel(OuterName);
 				Decal->SetFolderPath(TEXT("Decals"));
+
+				const TSharedPtr<FJsonObject>* DecalSizeObj = nullptr;
+				if ((*Props)->TryGetObjectField(TEXT("DecalSize"), DecalSizeObj) && DecalSizeObj && (*DecalSizeObj).IsValid())
+				{
+					const float DX = (*DecalSizeObj)->GetNumberField(TEXT("X"));
+					const float DY = (*DecalSizeObj)->GetNumberField(TEXT("Y"));
+					const float DZ = (*DecalSizeObj)->GetNumberField(TEXT("Z"));
+					Decal->GetDecal()->DecalSize = FVector(DX, DY, DZ);
+				}
 
 				const TSharedPtr<FJsonObject>* DecalMaterial = nullptr;
 				if ((*Props)->TryGetObjectField(TEXT("DecalMaterial"), DecalMaterial) && DecalMaterial && (*DecalMaterial).IsValid())
@@ -1121,17 +1273,18 @@ namespace
 						SpawnedLight = SkyL;
 						if (USkyLightComponent* SkyComp = SkyL->GetLightComponent())
 						{
-							SkyComp->SetMobility(EComponentMobility::Static);
+							SkyComp->SetMobility(EComponentMobility::Movable);
+							SkyComp->bRealTimeCapture = true;
 							float IntensityVal = 0.0f;
 							if ((*Props)->TryGetNumberField(TEXT("Intensity"), IntensityVal) && IntensityVal > 0.0f)
 							{
+								if (IntensityVal < 100.0f)
+								{
+									IntensityVal *= 10000.0f;
+								}
 								SkyComp->SetIntensity(IntensityVal);
 							}
-							float IndirectIntensity = 0.0f;
-							if ((*Props)->TryGetNumberField(TEXT("IndirectLightingIntensity"), IndirectIntensity))
-							{
-								SkyComp->IndirectLightingIntensity = IndirectIntensity;
-							}
+							SkyComp->IndirectLightingIntensity = 2.0f;
 							const TSharedPtr<FJsonObject>* ColorObj = nullptr;
 							if ((*Props)->TryGetObjectField(TEXT("LightColor"), ColorObj) && ColorObj && (*ColorObj).IsValid())
 							{
@@ -1160,18 +1313,33 @@ namespace
 					SpawnedLight->SetFolderPath(TEXT("Lights"));
 					if (LightComp)
 					{
-						LightComp->SetMobility(EComponentMobility::Static);
+						LightComp->SetMobility(EComponentMobility::Movable);
 
 						float IntensityVal = 0.0f;
 						if ((*Props)->TryGetNumberField(TEXT("Intensity"), IntensityVal) && IntensityVal > 0.0f)
 						{
+							if (Type == TEXT("DirectionalLightComponent"))
+							{
+								if (IntensityVal < 100.0f)
+								{
+									IntensityVal *= 10000.0f;
+								}
+							}
+							else if (IntensityVal < 100.0f)
+							{
+								IntensityVal *= 1000.0f;
+							}
 							LightComp->SetIntensity(IntensityVal);
 						}
 
 						float IndirectIntensity = 0.0f;
-						if ((*Props)->TryGetNumberField(TEXT("IndirectLightingIntensity"), IndirectIntensity))
+						if ((*Props)->TryGetNumberField(TEXT("IndirectLightingIntensity"), IndirectIntensity) && IndirectIntensity > 0.0f)
 						{
 							LightComp->SetIndirectLightingIntensity(IndirectIntensity);
+						}
+						else
+						{
+							LightComp->SetIndirectLightingIntensity(2.0f);
 						}
 
 						const TSharedPtr<FJsonObject>* ColorObj = nullptr;
@@ -1183,6 +1351,66 @@ namespace
 							(*ColorObj)->TryGetNumberField(TEXT("B"), B);
 							LightComp->SetLightColor(FLinearColor(FColor(R, G, B, 255)));
 						}
+					}
+				}
+				continue;
+			}
+
+			if (Config.bImportLights && Type == TEXT("PostProcessVolume"))
+			{
+				APostProcessVolume* PPV = World->SpawnActor<APostProcessVolume>(APostProcessVolume::StaticClass(), Transform);
+				if (PPV)
+				{
+					PPV->SetActorLabel(OuterName);
+					PPV->SetFolderPath(TEXT("Lights"));
+					PPV->bUnbound = true;
+
+					const TSharedPtr<FJsonObject>* SettingsObj = nullptr;
+					if ((*Props)->TryGetObjectField(TEXT("Settings"), SettingsObj) && SettingsObj && (*SettingsObj).IsValid())
+					{
+						float WhiteTemp = 0.0f;
+						if ((*SettingsObj)->TryGetNumberField(TEXT("WhiteTemp"), WhiteTemp) && WhiteTemp > 0.0f)
+						{
+							PPV->Settings.bOverride_WhiteTemp = true;
+							PPV->Settings.WhiteTemp = WhiteTemp;
+						}
+						float BloomInt = 0.0f;
+						if ((*SettingsObj)->TryGetNumberField(TEXT("BloomIntensity"), BloomInt) && BloomInt > 0.0f)
+						{
+							PPV->Settings.bOverride_BloomIntensity = true;
+							PPV->Settings.BloomIntensity = BloomInt;
+						}
+						float IndirectInt = 0.0f;
+						if ((*SettingsObj)->TryGetNumberField(TEXT("IndirectLightingIntensity"), IndirectInt) && IndirectInt > 0.0f)
+						{
+							PPV->Settings.bOverride_IndirectLightingIntensity = true;
+							PPV->Settings.IndirectLightingIntensity = IndirectInt;
+						}
+					}
+
+					PPV->Settings.bOverride_AutoExposureMethod = true;
+					PPV->Settings.AutoExposureMethod = EAutoExposureMethod::AEM_Basic;
+					PPV->Settings.bOverride_AutoExposureMinBrightness = true;
+					PPV->Settings.AutoExposureMinBrightness = 1.0f;
+					PPV->Settings.bOverride_AutoExposureMaxBrightness = true;
+					PPV->Settings.AutoExposureMaxBrightness = 1.0f;
+					PPV->Settings.bOverride_AutoExposureBias = true;
+					PPV->Settings.AutoExposureBias = 0.8f;
+					PPV->Settings.bOverride_ColorSaturation = true;
+					PPV->Settings.ColorSaturation = FVector4(1.12f, 1.12f, 1.12f, 1.0f);
+					PPV->Settings.bOverride_IndirectLightingIntensity = true;
+					PPV->Settings.IndirectLightingIntensity = 1.5f;
+					PPV->Settings.bOverride_IndirectLightingColor = true;
+					PPV->Settings.IndirectLightingColor = FLinearColor(1.0f, 0.956f, 0.88f, 1.0f);
+					if (!PPV->Settings.bOverride_BloomIntensity)
+					{
+						PPV->Settings.bOverride_BloomIntensity = true;
+						PPV->Settings.BloomIntensity = 0.6f;
+					}
+					if (!PPV->Settings.bOverride_WhiteTemp)
+					{
+						PPV->Settings.bOverride_WhiteTemp = true;
+						PPV->Settings.WhiteTemp = 6200.0f;
 					}
 				}
 				continue;
@@ -1234,7 +1462,7 @@ namespace
 
 				TArray<TSharedPtr<FJsonValue>> Filtered;
 				FilterUMapAndCollectAssets(UMapArray, Filtered, ObjectList, OverrideMaterialList, ActorList);
-				SaveJsonArray(UMapFile, Filtered);
+				// Do not overwrite UMapFile with Filtered array — preserving full array keeps CUE4Parse export indices valid for AttachParent resolution!
 			}
 
 			const FString ActorsAssetList = BuildAssetFile(FPaths::Combine(Paths.Root, TEXT("_assets_actors.txt")), ActorList);
@@ -1395,6 +1623,47 @@ namespace
 			const FString& UMapFile = UMapJsonPaths[Idx];
 			SpawnTask.EnterProgressFrame(1.f, FText::FromString(FString::Printf(TEXT("Importing %d/%d"), UMapJsonPaths.Num() - Idx, UMapJsonPaths.Num())));
 			ImportMapActors(UMapFile, Config);
+		}
+
+		if (Config.bImportLights && GEditor)
+		{
+			if (UWorld* World = GEditor->GetEditorWorldContext().World())
+			{
+				bool bHasPPV = false;
+				for (TActorIterator<APostProcessVolume> It(World); It; ++It)
+				{
+					bHasPPV = true;
+					break;
+				}
+				if (!bHasPPV)
+				{
+					APostProcessVolume* PPV = World->SpawnActor<APostProcessVolume>(APostProcessVolume::StaticClass());
+					if (PPV)
+					{
+						PPV->SetActorLabel(TEXT("Valorant_PostProcess"));
+						PPV->SetFolderPath(TEXT("Lights"));
+						PPV->bUnbound = true;
+						PPV->Settings.bOverride_AutoExposureMethod = true;
+						PPV->Settings.AutoExposureMethod = EAutoExposureMethod::AEM_Basic;
+						PPV->Settings.bOverride_AutoExposureMinBrightness = true;
+						PPV->Settings.AutoExposureMinBrightness = 1.0f;
+						PPV->Settings.bOverride_AutoExposureMaxBrightness = true;
+						PPV->Settings.AutoExposureMaxBrightness = 1.0f;
+						PPV->Settings.bOverride_AutoExposureBias = true;
+						PPV->Settings.AutoExposureBias = 0.8f;
+						PPV->Settings.bOverride_WhiteTemp = true;
+						PPV->Settings.WhiteTemp = 6200.0f;
+						PPV->Settings.bOverride_ColorSaturation = true;
+						PPV->Settings.ColorSaturation = FVector4(1.12f, 1.12f, 1.12f, 1.0f);
+						PPV->Settings.bOverride_BloomIntensity = true;
+						PPV->Settings.BloomIntensity = 0.6f;
+						PPV->Settings.bOverride_IndirectLightingIntensity = true;
+						PPV->Settings.IndirectLightingIntensity = 1.5f;
+						PPV->Settings.bOverride_IndirectLightingColor = true;
+						PPV->Settings.IndirectLightingColor = FLinearColor(1.0f, 0.956f, 0.88f, 1.0f);
+					}
+				}
+			}
 		}
 
 		return true;

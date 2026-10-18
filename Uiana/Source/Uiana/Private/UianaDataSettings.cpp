@@ -117,26 +117,23 @@ TArray<FString> UUianaDataSettings::GetMapNames() const
 				for (const auto& Kvp : RootObject->Values)
 				{
 					FString Key = *Kvp.Key;
-					// Only include display names (begins with upper case or contains space)
-					if (!Key.IsEmpty() && (FChar::IsUpper(Key[0]) || Key.Contains(TEXT(" "))))
+					if (Key.IsEmpty())
+					{
+						continue;
+					}
+					if (FChar::IsUpper(Key[0]) || Key.Contains(TEXT(" ")))
 					{
 						MapNames.AddUnique(Key);
+					}
+					else
+					{
+						FString CapitalizedKey = Key;
+						CapitalizedKey[0] = FChar::ToUpper(CapitalizedKey[0]);
+						MapNames.AddUnique(CapitalizedKey);
 					}
 				}
 			}
 		}
-	}
-
-	if (MapNames.IsEmpty())
-	{
-		MapNames = {
-			TEXT("Abyss"), TEXT("Ascent"), TEXT("Basic Training"), TEXT("Bind"),
-			TEXT("Breeze"), TEXT("Character Select"), TEXT("Corrode"), TEXT("District"),
-			TEXT("Drift"), TEXT("Fracture"), TEXT("Gauntlet"), TEXT("Glitch"),
-			TEXT("Haven"), TEXT("Icebox"), TEXT("Kasbah"), TEXT("Lotus"),
-			TEXT("Menu"), TEXT("Pearl"), TEXT("Piazza"), TEXT("Range"),
-			TEXT("Split"), TEXT("Summit"), TEXT("Sunset"), TEXT("The Range")
-		};
 	}
 
 	MapNames.Sort();

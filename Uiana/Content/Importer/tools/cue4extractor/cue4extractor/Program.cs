@@ -437,7 +437,54 @@ namespace cue4extractor
                 }
             }
 
-            // 2. Special fallback maps
+            // 2. Discover any additional maps under ShooterGame/Content/Maps/ that might not have a UIData
+            var allUmapFiles = provider.Files.Keys
+                .Where(k => k.StartsWith("shootergame/content/maps/", StringComparison.OrdinalIgnoreCase) && 
+                            k.EndsWith(".umap", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            foreach (var umapPath in allUmapFiles)
+            {
+                var segments = umapPath.Split('/');
+                // e.g. shootergame/content/maps/{Folder}/{MapName}.umap
+                if (segments.Length >= 4)
+                {
+                    var mapFolderName = segments[3];
+                    var mapFileName = Path.GetFileNameWithoutExtension(umapPath);
+
+                    // Skip known sub-level suffixes to avoid cluttering map list with sub-levels
+                    if (mapFileName.Contains("_Art", StringComparison.OrdinalIgnoreCase) ||
+                        mapFileName.Contains("_Lighting", StringComparison.OrdinalIgnoreCase) ||
+                        mapFileName.Contains("_Audio", StringComparison.OrdinalIgnoreCase) ||
+                        mapFileName.Contains("_VFX", StringComparison.OrdinalIgnoreCase) ||
+                        mapFileName.Contains("_Gameplay", StringComparison.OrdinalIgnoreCase) ||
+                        mapFileName.Contains("_Volumes", StringComparison.OrdinalIgnoreCase) ||
+                        mapFileName.Contains("_KillVolumes", StringComparison.OrdinalIgnoreCase) ||
+                        mapFileName.Contains("_NavMesh", StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    if (!result.ContainsKey(mapFolderName) && !result.ContainsKey(mapFileName))
+                    {
+                        var candidateExport = ToExportPath(umapPath.SubstringBeforeLast('.'));
+                        if (!candidateExport.StartsWith("/Game/", StringComparison.OrdinalIgnoreCase) && !candidateExport.StartsWith("Game/", StringComparison.OrdinalIgnoreCase))
+                        {
+                            candidateExport = "/Game/" + candidateExport.TrimStart('/');
+                        }
+                        else if (!candidateExport.StartsWith('/'))
+                        {
+                            candidateExport = "/" + candidateExport;
+                        }
+
+                        var capName = char.ToUpper(mapFolderName[0]) + (mapFolderName.Length > 1 ? mapFolderName.Substring(1) : "");
+                        result[capName] = new[] { candidateExport };
+                        result[mapFolderName.ToLower()] = new[] { candidateExport };
+                    }
+                }
+            }
+
+            // 3. Special fallback maps
             var fallbacks = new (string Name, string Path)[]
             {
                 ("Character Select", "ShooterGame/Content/Maps/PregameV2/CharacterSelectPersistentLevel"),
