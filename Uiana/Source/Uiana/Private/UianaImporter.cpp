@@ -375,8 +375,22 @@ namespace
 		}
 
 		const FString MatName = (ObjectName == TEXT("Stone_M2_Steps_MI1")) ? TEXT("Stone_M2_Steps_MI") : ObjectName;
+		if (MatName.StartsWith(TEXT("M_Sky_")))
+		{
+			const FString PluginSkyPath = FString::Printf(TEXT("/Uiana/Materials/%s.%s"), *MatName, *MatName);
+			if (UMaterialInterface* SkyMat = Cast<UMaterialInterface>(StaticLoadObject(UMaterialInterface::StaticClass(), nullptr, *PluginSkyPath)))
+			{
+				return SkyMat;
+			}
+		}
 		const FString AssetPath = FString::Printf(TEXT("/Game/ValorantContent/Materials/%s.%s"), *MatName, *MatName);
-		return Cast<UMaterialInterface>(StaticLoadObject(UMaterialInterface::StaticClass(), nullptr, *AssetPath));
+		UMaterialInterface* Mat = Cast<UMaterialInterface>(StaticLoadObject(UMaterialInterface::StaticClass(), nullptr, *AssetPath));
+		if (!Mat)
+		{
+			const FString PluginPath = FString::Printf(TEXT("/Uiana/Materials/%s.%s"), *MatName, *MatName);
+			Mat = Cast<UMaterialInterface>(StaticLoadObject(UMaterialInterface::StaticClass(), nullptr, *PluginPath));
+		}
+		return Mat;
 	}
 
 	void SaveUniqueList(const FString& OutPath, const TArray<FString>& InLines)
@@ -754,7 +768,20 @@ namespace
 					ParentName = TEXT("BaseEnv_MAT_V4");
 				}
 			}
-			const FString ParentPath = FString::Printf(TEXT("/Uiana/Materials/%s.%s"), *ParentName, *ParentName);
+			else if (MaterialName.StartsWith(TEXT("M_Sky_")))
+			{
+				ParentName = TEXT("BaseEnv_Unlit_Texture_MAT_V4");
+			}
+
+			FString ParentPath = FString::Printf(TEXT("/Uiana/Materials/%s.%s"), *ParentName, *ParentName);
+			if (MaterialName.StartsWith(TEXT("M_Sky_")))
+			{
+				const FString DirectSky = FString::Printf(TEXT("/Uiana/Materials/%s.%s"), *MaterialName, *MaterialName);
+				if (UMaterialInterface* SkyMaster = Cast<UMaterialInterface>(StaticLoadObject(UMaterialInterface::StaticClass(), nullptr, *DirectSky)))
+				{
+					ParentPath = DirectSky;
+				}
+			}
 			if (UMaterialInterface* ParentMat = Cast<UMaterialInterface>(StaticLoadObject(UMaterialInterface::StaticClass(), nullptr, *ParentPath)))
 			{
 				MIC->SetParentEditorOnly(ParentMat);
@@ -1274,17 +1301,18 @@ namespace
 						if (USkyLightComponent* SkyComp = SkyL->GetLightComponent())
 						{
 							SkyComp->SetMobility(EComponentMobility::Movable);
-							SkyComp->bRealTimeCapture = true;
-							float IntensityVal = 0.0f;
+							SkyComp->bRealTimeCapture = false;
+							float IntensityVal = 1.8f;
 							if ((*Props)->TryGetNumberField(TEXT("Intensity"), IntensityVal) && IntensityVal > 0.0f)
 							{
-								if (IntensityVal < 100.0f)
+								if (IntensityVal > 100.0f)
 								{
-									IntensityVal *= 10000.0f;
+									IntensityVal /= 1000.0f;
 								}
-								SkyComp->SetIntensity(IntensityVal);
+								IntensityVal = FMath::Clamp(IntensityVal, 1.2f, 2.5f);
 							}
-							SkyComp->IndirectLightingIntensity = 2.0f;
+							SkyComp->SetIntensity(IntensityVal);
+							SkyComp->IndirectLightingIntensity = 1.0f;
 							const TSharedPtr<FJsonObject>* ColorObj = nullptr;
 							if ((*Props)->TryGetObjectField(TEXT("LightColor"), ColorObj) && ColorObj && (*ColorObj).IsValid())
 							{
@@ -1315,22 +1343,23 @@ namespace
 					{
 						LightComp->SetMobility(EComponentMobility::Movable);
 
-						float IntensityVal = 0.0f;
+						float IntensityVal = 4.5f;
 						if ((*Props)->TryGetNumberField(TEXT("Intensity"), IntensityVal) && IntensityVal > 0.0f)
 						{
 							if (Type == TEXT("DirectionalLightComponent"))
 							{
-								if (IntensityVal < 100.0f)
+								if (IntensityVal > 100.0f)
 								{
-									IntensityVal *= 10000.0f;
+									IntensityVal /= 1000.0f;
 								}
+								IntensityVal = FMath::Clamp(IntensityVal, 3.5f, 6.0f);
 							}
-							else if (IntensityVal < 100.0f)
+							else if (IntensityVal > 500.0f)
 							{
-								IntensityVal *= 1000.0f;
+								IntensityVal /= 100.0f;
 							}
-							LightComp->SetIntensity(IntensityVal);
 						}
+						LightComp->SetIntensity(IntensityVal);
 
 						float IndirectIntensity = 0.0f;
 						if ((*Props)->TryGetNumberField(TEXT("IndirectLightingIntensity"), IndirectIntensity) && IndirectIntensity > 0.0f)
@@ -1339,7 +1368,7 @@ namespace
 						}
 						else
 						{
-							LightComp->SetIndirectLightingIntensity(2.0f);
+							LightComp->SetIndirectLightingIntensity(1.0f);
 						}
 
 						const TSharedPtr<FJsonObject>* ColorObj = nullptr;
@@ -1391,26 +1420,23 @@ namespace
 					PPV->Settings.bOverride_AutoExposureMethod = true;
 					PPV->Settings.AutoExposureMethod = EAutoExposureMethod::AEM_Basic;
 					PPV->Settings.bOverride_AutoExposureMinBrightness = true;
-					PPV->Settings.AutoExposureMinBrightness = 1.0f;
+					PPV->Settings.AutoExposureMinBrightness = 0.5f;
 					PPV->Settings.bOverride_AutoExposureMaxBrightness = true;
-					PPV->Settings.AutoExposureMaxBrightness = 1.0f;
+					PPV->Settings.AutoExposureMaxBrightness = 2.0f;
 					PPV->Settings.bOverride_AutoExposureBias = true;
-					PPV->Settings.AutoExposureBias = 0.8f;
+					PPV->Settings.AutoExposureBias = 0.0f;
 					PPV->Settings.bOverride_ColorSaturation = true;
-					PPV->Settings.ColorSaturation = FVector4(1.12f, 1.12f, 1.12f, 1.0f);
+					PPV->Settings.ColorSaturation = FVector4(1.08f, 1.08f, 1.08f, 1.0f);
 					PPV->Settings.bOverride_IndirectLightingIntensity = true;
-					PPV->Settings.IndirectLightingIntensity = 1.5f;
+					PPV->Settings.IndirectLightingIntensity = 1.0f;
 					PPV->Settings.bOverride_IndirectLightingColor = true;
 					PPV->Settings.IndirectLightingColor = FLinearColor(1.0f, 0.956f, 0.88f, 1.0f);
-					if (!PPV->Settings.bOverride_BloomIntensity)
-					{
-						PPV->Settings.bOverride_BloomIntensity = true;
-						PPV->Settings.BloomIntensity = 0.6f;
-					}
+					PPV->Settings.bOverride_BloomIntensity = true;
+					PPV->Settings.BloomIntensity = 0.05f;
 					if (!PPV->Settings.bOverride_WhiteTemp)
 					{
 						PPV->Settings.bOverride_WhiteTemp = true;
-						PPV->Settings.WhiteTemp = 6200.0f;
+						PPV->Settings.WhiteTemp = 6500.0f;
 					}
 				}
 				continue;
@@ -1646,19 +1672,19 @@ namespace
 						PPV->Settings.bOverride_AutoExposureMethod = true;
 						PPV->Settings.AutoExposureMethod = EAutoExposureMethod::AEM_Basic;
 						PPV->Settings.bOverride_AutoExposureMinBrightness = true;
-						PPV->Settings.AutoExposureMinBrightness = 1.0f;
+						PPV->Settings.AutoExposureMinBrightness = 0.5f;
 						PPV->Settings.bOverride_AutoExposureMaxBrightness = true;
-						PPV->Settings.AutoExposureMaxBrightness = 1.0f;
+						PPV->Settings.AutoExposureMaxBrightness = 2.0f;
 						PPV->Settings.bOverride_AutoExposureBias = true;
-						PPV->Settings.AutoExposureBias = 0.8f;
+						PPV->Settings.AutoExposureBias = 0.0f;
 						PPV->Settings.bOverride_WhiteTemp = true;
-						PPV->Settings.WhiteTemp = 6200.0f;
+						PPV->Settings.WhiteTemp = 6500.0f;
 						PPV->Settings.bOverride_ColorSaturation = true;
-						PPV->Settings.ColorSaturation = FVector4(1.12f, 1.12f, 1.12f, 1.0f);
+						PPV->Settings.ColorSaturation = FVector4(1.08f, 1.08f, 1.08f, 1.0f);
 						PPV->Settings.bOverride_BloomIntensity = true;
-						PPV->Settings.BloomIntensity = 0.6f;
+						PPV->Settings.BloomIntensity = 0.05f;
 						PPV->Settings.bOverride_IndirectLightingIntensity = true;
-						PPV->Settings.IndirectLightingIntensity = 1.5f;
+						PPV->Settings.IndirectLightingIntensity = 1.0f;
 						PPV->Settings.bOverride_IndirectLightingColor = true;
 						PPV->Settings.IndirectLightingColor = FLinearColor(1.0f, 0.956f, 0.88f, 1.0f);
 					}
