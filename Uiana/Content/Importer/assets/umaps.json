@@ -1,0 +1,50 @@
+{
+  "character select": [
+    "ShooterGame/Content/Maps/PregameV2/CharacterSelectPersistentLevel"
+  ],
+  "haven": [
+    "/Game/Maps/Triad/Triad"
+  ],
+  "pearl": [
+    "/Game/Maps/Pitt/Pitt"
+  ],
+  "fracture": [
+    "/Game/Maps/Canyon/Canyon"
+  ],
+  "range": [
+    "/Game/Maps/Poveglia/Range"
+  ],
+  "split": [
+    "/Game/Maps/Bonsai/Bonsai"
+  ],
+  "bind": [
+    "/Game/Maps/Duality/Duality"
+  ],
+  "breeze": [
+    "/Game/Maps/Foxtrot/Foxtrot"
+  ],
+  "ascent": [
+    "/Game/Maps/Ascent/Ascent"
+  ],
+  "icebox": [
+    "/Game/Maps/Port/Port"
+  ],
+  "sunset": [
+    "/Game/Maps/Juliett/Juliett"
+  ],
+  "piazza": [
+    "/Game/Maps/HURM/HURM_Yard/HURM_Yard"
+  ],
+  "district": [
+    "/Game/Maps/HURM/HURM_Alley/HURM_Alley"
+  ],
+  "kasbah": [
+    "/Game/Maps/HURM/HURM_Bowl/HURM_Bowl"
+  ],
+  "menu": [
+    "/Game/Maps/Menu/MainMenuV2"
+  ],
+  "lotus": [
+    "/Game/Maps/Jam/Jam"
+  ]
+}
