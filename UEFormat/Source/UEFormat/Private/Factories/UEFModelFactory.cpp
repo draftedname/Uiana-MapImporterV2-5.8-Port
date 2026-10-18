@@ -172,14 +172,22 @@ UStaticMesh* UEFModelFactory::CreateStaticMesh(TArray<FLODData>& LODData, UObjec
 	StaticMesh->GetStaticMaterials() = CreateStaticMaterials(LODData[0].Materials);
 	
 	//Mesh LOD Settings
+	const int32 NumUVChannels = LODData[0].TextureCoordinates.Num();
+	const bool bHasLightmapUV = (NumUVChannels >= 2);
+
 	for (auto i = 0; i < StaticMesh->GetSourceModels().Num(); ++i)
 	{
 		FStaticMeshSourceModel& SourceModel = StaticMesh->GetSourceModel(i);
 		SourceModel.BuildSettings.bRecomputeNormals = false;
 		SourceModel.BuildSettings.bRecomputeTangents = false;
 		SourceModel.BuildSettings.bRemoveDegenerates = false;
-		SourceModel.BuildSettings.bGenerateLightmapUVs = false;
+		SourceModel.BuildSettings.bGenerateLightmapUVs = !bHasLightmapUV;
+		SourceModel.BuildSettings.SrcLightmapIndex = 0;
+		SourceModel.BuildSettings.DstLightmapIndex = 1;
+		SourceModel.BuildSettings.MinLightmapResolution = 64;
 	}
+	StaticMesh->SetLightMapCoordinateIndex(1);
+	StaticMesh->SetLightMapResolution(64);
 	StaticMesh->Modify();
 	
 	return StaticMesh;

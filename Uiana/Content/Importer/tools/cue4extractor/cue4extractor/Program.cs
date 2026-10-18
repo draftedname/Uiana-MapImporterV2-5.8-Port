@@ -223,15 +223,46 @@ namespace cue4extractor
 
         private static List<string> GetUmapList(string targetMapName, string jsonFilePath, DefaultFileProvider fileProvider)
         {
-            var jsonContent = File.ReadAllText(jsonFilePath);
-            var mapDictionary = JsonConvert.DeserializeObject<Dictionary<string, string[]>>(jsonContent);
-            if (mapDictionary == null || !mapDictionary.ContainsKey(targetMapName))
+            Dictionary<string, string[]>? mapDictionary = null;
+            if (File.Exists(jsonFilePath))
             {
-                Console.WriteLine($"ERROR - Map '{targetMapName}' not found in {jsonFilePath}");
+                try
+                {
+                    var jsonContent = File.ReadAllText(jsonFilePath);
+                    mapDictionary = JsonConvert.DeserializeObject<Dictionary<string, string[]>>(jsonContent);
+                }
+                catch { }
+            }
+
+            string? targetMapPath = null;
+            if (mapDictionary != null && mapDictionary.TryGetValue(targetMapName, out var paths) && paths.Length > 0)
+            {
+                targetMapPath = paths[0];
+            }
+            else
+            {
+                Console.WriteLine($"INFO - Map '{targetMapName}' not found in JSON cache, discovering dynamically...");
+                var discovered = DiscoverAllMaps(fileProvider);
+                if (discovered.TryGetValue(targetMapName, out var discPaths) && discPaths.Length > 0)
+                {
+                    targetMapPath = discPaths[0];
+                }
+                else
+                {
+                    var directCandidate = $"ShooterGame/Content/Maps/{targetMapName}/{targetMapName}";
+                    if (fileProvider.Files.ContainsKey(directCandidate.ToLower() + ".umap") || fileProvider.Files.ContainsKey(directCandidate.ToLower() + ".uasset"))
+                    {
+                        targetMapPath = directCandidate;
+                    }
+                }
+            }
+
+            if (string.IsNullOrEmpty(targetMapPath))
+            {
+                Console.WriteLine($"ERROR - Map '{targetMapName}' not found in game files or JSON mapping.");
                 return new List<string>();
             }
 
-            var targetMapPath = mapDictionary[targetMapName][0];
             var providerPath = ToProviderPath(targetMapPath);
             List<string> objectNames = new List<string>();
 
@@ -315,6 +346,152 @@ namespace cue4extractor
             return candidates.FirstOrDefault(File.Exists);
         }
 
+        private static Dictionary<string, string[]> DiscoverAllMaps(DefaultFileProvider provider)
+        {
+            var result = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase);
+
+            // 1. Scan for all *_UIData assets under ShooterGame/Content/Maps
+            var uiDataPaths = provider.Files.Keys
+                .Where(k => k.StartsWith("shootergame/content/maps/", StringComparison.OrdinalIgnoreCase) && 
+                            k.EndsWith("_uidata.uasset", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            foreach (var uiPath in uiDataPaths)
+            {
+                var pkgPath = uiPath.SubstringBeforeLast('.');
+                if (!provider.TryLoadPackage(pkgPath, out var pkg)) continue;
+
+                string? displayName = null;
+                foreach (var exp in pkg.GetExports())
+                {
+                    var prop = exp.Properties.FirstOrDefault(p => p.Name.Text.Equals("DisplayName", StringComparison.OrdinalIgnoreCase));
+                    if (prop != null && prop.Tag != null)
+                    {
+                        var valStr = prop.Tag.GenericValue?.ToString();
+                        if (!string.IsNullOrWhiteSpace(valStr))
+                        {
+                            displayName = valStr.Trim();
+                            break;
+                        }
+                    }
+                }
+
+                // Determine folder containing this UIData
+                var dir = Path.GetDirectoryName(pkgPath)?.Replace('\\', '/');
+                if (string.IsNullOrEmpty(dir)) continue;
+
+                var folderName = dir.SubstringAfterLast('/');
+                if (string.IsNullOrEmpty(displayName))
+                {
+                    displayName = folderName;
+                }
+
+                // Find main world level in this folder
+                string? worldPath = null;
+                var candidate1 = $"{dir}/{folderName}.umap";
+                var candidate2 = $"{dir}/{folderName}.uasset";
+                if (provider.Files.ContainsKey(candidate1) || provider.Files.ContainsKey(candidate2))
+                {
+                    worldPath = $"{dir}/{folderName}";
+                }
+                else
+                {
+                    var mainUmap = provider.Files.Keys
+                        .FirstOrDefault(k => k.StartsWith(dir + "/", StringComparison.OrdinalIgnoreCase) &&
+                                             k.EndsWith(".umap", StringComparison.OrdinalIgnoreCase) &&
+                                             !k.Contains("_Art", StringComparison.OrdinalIgnoreCase) &&
+                                             !k.Contains("_Lighting", StringComparison.OrdinalIgnoreCase) &&
+                                             !k.Contains("_Audio", StringComparison.OrdinalIgnoreCase) &&
+                                             !k.Contains("_VFX", StringComparison.OrdinalIgnoreCase) &&
+                                             !k.Contains("_Gameplay", StringComparison.OrdinalIgnoreCase));
+                    if (mainUmap != null)
+                    {
+                        worldPath = mainUmap.SubstringBeforeLast('.');
+                    }
+                }
+
+                if (!string.IsNullOrEmpty(worldPath))
+                {
+                    var gamePath = ToExportPath(worldPath);
+                    if (!gamePath.StartsWith("/Game/", StringComparison.OrdinalIgnoreCase) && !gamePath.StartsWith("Game/", StringComparison.OrdinalIgnoreCase))
+                    {
+                        gamePath = "/Game/" + gamePath.TrimStart('/');
+                    }
+                    else if (!gamePath.StartsWith('/'))
+                    {
+                        gamePath = "/" + gamePath;
+                    }
+
+                    if (!result.ContainsKey(displayName))
+                    {
+                        result[displayName] = new[] { gamePath };
+                    }
+                    if (!result.ContainsKey(displayName.ToLower()))
+                    {
+                        result[displayName.ToLower()] = new[] { gamePath };
+                    }
+                    if (!result.ContainsKey(folderName.ToLower()))
+                    {
+                        result[folderName.ToLower()] = new[] { gamePath };
+                    }
+                }
+            }
+
+            // 2. Special fallback maps
+            var fallbacks = new (string Name, string Path)[]
+            {
+                ("Character Select", "ShooterGame/Content/Maps/PregameV2/CharacterSelectPersistentLevel"),
+                ("Menu", "/Game/Maps/Menu/MainMenuV2"),
+                ("Range", "/Game/Maps/Poveglia/Range")
+            };
+
+            foreach (var fb in fallbacks)
+            {
+                if (!result.ContainsKey(fb.Name))
+                {
+                    result[fb.Name] = new[] { fb.Path };
+                    result[fb.Name.ToLower()] = new[] { fb.Path };
+                }
+            }
+
+            return result;
+        }
+
+        private static void ListMaps(DefaultFileProvider provider, string outputJsonPath)
+        {
+            var maps = DiscoverAllMaps(provider);
+
+            var uniqueDisplayNames = maps.Keys
+                .Where(k => char.IsUpper(k[0]) || k.Contains(' '))
+                .Distinct()
+                .OrderBy(k => k)
+                .ToList();
+
+            Console.WriteLine($"=== DISCOVERED VALORANT MAPS ({uniqueDisplayNames.Count}) ===");
+            foreach (var name in uniqueDisplayNames)
+            {
+                Console.WriteLine($"  {name} -> {maps[name][0]}");
+            }
+
+            if (!string.IsNullOrEmpty(outputJsonPath))
+            {
+                try
+                {
+                    var dir = Path.GetDirectoryName(outputJsonPath);
+                    if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+                        Directory.CreateDirectory(dir);
+
+                    var json = JsonConvert.SerializeObject(maps, Formatting.Indented);
+                    File.WriteAllText(outputJsonPath, json);
+                    Console.WriteLine($"INFO - Wrote map definitions to: {outputJsonPath}");
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"ERROR - Could not write JSON: {ex.Message}");
+                }
+            }
+        }
+
         /// <param name="gameDirectory">Valorant paks directory</param>
         /// <param name="aesKey">Valorant AES key</param>
         /// <param name="exportDirectory">Output directory for exports</param>
@@ -334,6 +511,8 @@ namespace cue4extractor
             bool exportAssets = false;
             string mappingsFile = "";
             string logFile = "";
+            bool listMaps = false;
+            string outputJson = "";
 
             for (int i = 0; i < args.Length; i++)
             {
@@ -341,6 +520,10 @@ namespace cue4extractor
                 if (arg.Equals("--export-assets", StringComparison.OrdinalIgnoreCase))
                 {
                     exportAssets = true;
+                }
+                else if (arg.Equals("--list-maps", StringComparison.OrdinalIgnoreCase))
+                {
+                    listMaps = true;
                 }
                 else if (i + 1 < args.Length)
                 {
@@ -352,6 +535,7 @@ namespace cue4extractor
                     else if (arg.Equals("--game-umaps", StringComparison.OrdinalIgnoreCase)) gameUmaps = args[++i];
                     else if (arg.Equals("--mappings-file", StringComparison.OrdinalIgnoreCase)) mappingsFile = args[++i];
                     else if (arg.Equals("--log-file", StringComparison.OrdinalIgnoreCase)) logFile = args[++i];
+                    else if (arg.Equals("--output-json", StringComparison.OrdinalIgnoreCase)) outputJson = args[++i];
                 }
             }
             StreamWriter? fileWriter = null;
@@ -409,6 +593,12 @@ namespace cue4extractor
                 var folder = Path.Combine(exportDirectory);
                 if (!Directory.Exists(folder))
                     Directory.CreateDirectory(folder);
+
+                if (listMaps)
+                {
+                    ListMaps(provider, outputJson);
+                    return;
+                }
 
                 if (exportAssets && !string.IsNullOrEmpty(fileList) && File.Exists(fileList))
                 {

@@ -1,50 +1,167 @@
 {
-  "character select": [
-    "ShooterGame/Content/Maps/PregameV2/CharacterSelectPersistentLevel"
+  "Breeze": [
+    "/Game/Maps/FoxTrot/FoxTrot"
   ],
-  "haven": [
-    "/Game/Maps/Triad/Triad"
+  "foxtrot": [
+    "/Game/Maps/FoxTrot/FoxTrot"
   ],
-  "pearl": [
-    "/Game/Maps/Pitt/Pitt"
-  ],
-  "fracture": [
+  "Fracture": [
     "/Game/Maps/Canyon/Canyon"
   ],
-  "range": [
-    "/Game/Maps/Poveglia/Range"
+  "canyon": [
+    "/Game/Maps/Canyon/Canyon"
   ],
-  "split": [
-    "/Game/Maps/Bonsai/Bonsai"
+  "Haven": [
+    "/Game/Maps/Triad/Triad"
   ],
-  "bind": [
-    "/Game/Maps/Duality/Duality"
+  "triad": [
+    "/Game/Maps/Triad/Triad"
   ],
-  "breeze": [
-    "/Game/Maps/Foxtrot/Foxtrot"
+  "Lotus": [
+    "/Game/Maps/Jam/Jam"
   ],
-  "ascent": [
-    "/Game/Maps/Ascent/Ascent"
+  "jam": [
+    "/Game/Maps/Jam/Jam"
   ],
-  "icebox": [
-    "/Game/Maps/Port/Port"
+  "Pearl": [
+    "/Game/Maps/Pitt/Pitt"
   ],
-  "sunset": [
+  "pitt": [
+    "/Game/Maps/Pitt/Pitt"
+  ],
+  "Sunset": [
     "/Game/Maps/Juliett/Juliett"
   ],
-  "piazza": [
-    "/Game/Maps/HURM/HURM_Yard/HURM_Yard"
+  "juliett": [
+    "/Game/Maps/Juliett/Juliett"
   ],
-  "district": [
+  "Corrode": [
+    "/Game/Maps/Rook/Rook"
+  ],
+  "rook": [
+    "/Game/Maps/Rook/Rook"
+  ],
+  "Ascent": [
+    "/Game/Maps/Ascent/Ascent"
+  ],
+  "Split": [
+    "/Game/Maps/Bonsai/Bonsai"
+  ],
+  "bonsai": [
+    "/Game/Maps/Bonsai/Bonsai"
+  ],
+  "Bind": [
+    "/Game/Maps/Duality/Duality"
+  ],
+  "duality": [
+    "/Game/Maps/Duality/Duality"
+  ],
+  "Abyss": [
+    "/Game/Maps/Infinity/Infinity"
+  ],
+  "infinity": [
+    "/Game/Maps/Infinity/Infinity"
+  ],
+  "Icebox": [
+    "/Game/Maps/Port/Port"
+  ],
+  "port": [
+    "/Game/Maps/Port/Port"
+  ],
+  "The Range": [
+    "/Game/Maps/Poveglia/Range"
+  ],
+  "poveglia": [
+    "/Game/Maps/Poveglia/Range"
+  ],
+  "Summit": [
+    "/Game/Maps/Plummet/Plummet"
+  ],
+  "plummet": [
+    "/Game/Maps/Plummet/Plummet"
+  ],
+  "Skirmish A": [
+    "/Game/Maps/Duel/Duel_1/Skirmish_A"
+  ],
+  "duel_1": [
+    "/Game/Maps/Duel/Duel_1/Skirmish_A"
+  ],
+  "Skirmish B": [
+    "/Game/Maps/Duel/Duel_2/Skirmish_B"
+  ],
+  "duel_2": [
+    "/Game/Maps/Duel/Duel_2/Skirmish_B"
+  ],
+  "Skirmish C": [
+    "/Game/Maps/Duel/Duel_3/Skirmish_C"
+  ],
+  "duel_3": [
+    "/Game/Maps/Duel/Duel_3/Skirmish_C"
+  ],
+  "Skirmish E": [
+    "/Game/Maps/Duel/Duel_Heady/Skirmish_Heady_BV_Pawn"
+  ],
+  "duel_heady": [
+    "/Game/Maps/Duel/Duel_Heady/Skirmish_Heady_BV_Pawn"
+  ],
+  "Skirmish D": [
+    "/Game/Maps/Duel/Duel_Platform/Skirmish_D"
+  ],
+  "duel_platform": [
+    "/Game/Maps/Duel/Duel_Platform/Skirmish_D"
+  ],
+  "District": [
     "/Game/Maps/HURM/HURM_Alley/HURM_Alley"
   ],
-  "kasbah": [
+  "hurm_alley": [
+    "/Game/Maps/HURM/HURM_Alley/HURM_Alley"
+  ],
+  "Kasbah": [
     "/Game/Maps/HURM/HURM_Bowl/HURM_Bowl"
   ],
-  "menu": [
+  "hurm_bowl": [
+    "/Game/Maps/HURM/HURM_Bowl/HURM_Bowl"
+  ],
+  "Drift": [
+    "/Game/Maps/HURM/HURM_Helix/HURM_Helix"
+  ],
+  "hurm_helix": [
+    "/Game/Maps/HURM/HURM_Helix/HURM_Helix"
+  ],
+  "Glitch": [
+    "/Game/Maps/HURM/HURM_HighTide/HURM_HighTide"
+  ],
+  "hurm_hightide": [
+    "/Game/Maps/HURM/HURM_HighTide/HURM_HighTide"
+  ],
+  "Piazza": [
+    "/Game/Maps/HURM/HURM_Yard/HURM_Yard"
+  ],
+  "hurm_yard": [
+    "/Game/Maps/HURM/HURM_Yard/HURM_Yard"
+  ],
+  "Basic Training": [
+    "/Game/Maps/NPEV2/NPEV2"
+  ],
+  "npev2": [
+    "/Game/Maps/NPEV2/NPEV2"
+  ],
+  "povegliav2": [
+    "/Game/Maps/PovegliaV2/Range_Greybox+Jump_Reference"
+  ],
+  "Gauntlet": [
+    "/Game/Maps/AbilityDraft/AbilityDraft"
+  ],
+  "abilitydraft": [
+    "/Game/Maps/AbilityDraft/AbilityDraft"
+  ],
+  "Character Select": [
+    "ShooterGame/Content/Maps/PregameV2/CharacterSelectPersistentLevel"
+  ],
+  "Menu": [
     "/Game/Maps/Menu/MainMenuV2"
   ],
-  "lotus": [
-    "/Game/Maps/Jam/Jam"
+  "Range": [
+    "/Game/Maps/Poveglia/Range"
   ]
 }

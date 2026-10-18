@@ -9,6 +9,12 @@
 #include "Components/DecalComponent.h"
 #include "Components/HierarchicalInstancedStaticMeshComponent.h"
 #include "Components/StaticMeshComponent.h"
+#include "Components/PointLightComponent.h"
+#include "Components/SpotLightComponent.h"
+#include "Components/RectLightComponent.h"
+#include "Components/SkyLightComponent.h"
+#include "Components/DirectionalLightComponent.h"
+#include "Components/LightComponentBase.h"
 #include "Engine/DecalActor.h"
 #include "Engine/DirectionalLight.h"
 #include "Engine/PointLight.h"
@@ -574,9 +580,9 @@ namespace
 		return RunExternalTool(Config.Cue4ExtractorPath(), Args);
 	}
 
-	bool ExtractAssets(const FUianaImportConfig& Config, const FMapPaths& Paths)
+	bool ExtractAssets(const FUianaImportConfig& Config, const FMapPaths& Paths, const FString& CustomAssetList = FString())
 	{
-		const FString AssetObjects = FPaths::Combine(Paths.Root, TEXT("all_assets.txt"));
+		const FString AssetObjects = CustomAssetList.IsEmpty() ? FPaths::Combine(Paths.Root, TEXT("all_assets.txt")) : CustomAssetList;
 		const FString LogFilePath = FPaths::Combine(Config.ExportRoot, TEXT("cue4extractor.log"));
 		const FString Args = FString::Printf(
 			TEXT("--game-directory \"%s\" --aes-key %s --export-directory \"%s\" --file-list \"%s\" --game-umaps \"%s\" --export-assets --log-file \"%s\""),
@@ -593,6 +599,48 @@ namespace
 	{
 		SaveUniqueList(OutFilePath, Items);
 		return OutFilePath;
+	}
+
+	void CollectTexturesFromMaterialFolders(const FString& MatFolderA, const FString& MatFolderB, TSet<FString>& OutTexturePaths)
+	{
+		TArray<FString> Files;
+		ListFiles(MatFolderA, TEXT("json"), Files);
+		TArray<FString> FilesB;
+		ListFiles(MatFolderB, TEXT("json"), FilesB);
+		Files.Append(FilesB);
+
+		for (const FString& FilePath : Files)
+		{
+			TArray<TSharedPtr<FJsonValue>> JsonArray;
+			if (!ReadJsonArray(FilePath, JsonArray) || JsonArray.Num() == 0) continue;
+			for (const auto& Val : JsonArray)
+			{
+				TSharedPtr<FJsonObject> Obj = Val->AsObject();
+				if (!Obj.IsValid()) continue;
+				const TSharedPtr<FJsonObject>* Props = nullptr;
+				if (!Obj->TryGetObjectField(TEXT("Properties"), Props) || !Props || !(*Props).IsValid()) continue;
+				const TArray<TSharedPtr<FJsonValue>>* TexParams = nullptr;
+				if ((*Props)->TryGetArrayField(TEXT("TextureParameterValues"), TexParams) && TexParams)
+				{
+					for (const auto& TP : *TexParams)
+					{
+						TSharedPtr<FJsonObject> TPObj = TP->AsObject();
+						if (!TPObj.IsValid()) continue;
+						const TSharedPtr<FJsonObject>* PVal = nullptr;
+						if (TPObj->TryGetObjectField(TEXT("ParameterValue"), PVal) && PVal && (*PVal).IsValid())
+						{
+							FString ObjPath = (*PVal)->GetStringField(TEXT("ObjectPath"));
+							if (!ObjPath.IsEmpty())
+							{
+								int32 Dot = INDEX_NONE;
+								if (ObjPath.FindChar(TEXT('.'), Dot)) ObjPath = ObjPath.Left(Dot);
+								OutTexturePaths.Add(PathConvert(ObjPath));
+							}
+						}
+					}
+				}
+			}
+		}
 	}
 
 	void ImportAllTexturesFromMaterialJson(const FString& MaterialFilePath, const FUianaImportConfig& Config, TSet<FString>& InOutTextures)
@@ -869,6 +917,14 @@ namespace
 					Actor->SetActorLabel(OuterName);
 					Actor->SetFolderPath(TEXT("Meshes/Instanced"));
 					Actor->HismComponent->SetStaticMesh(LoadedMesh);
+					Actor->HismComponent->SetMobility(EComponentMobility::Static);
+
+					int32 OverriddenHismRes = 0;
+					if ((*Props)->TryGetNumberField(TEXT("OverriddenLightMapRes"), OverriddenHismRes) && OverriddenHismRes > 0)
+					{
+						Actor->HismComponent->OverriddenLightMapRes = FMath::RoundToInt(OverriddenHismRes * Config.LightmapResolutionMultiplier);
+						Actor->HismComponent->bOverrideLightMapRes = true;
+					}
 
 					const TArray<TSharedPtr<FJsonValue>>* Instances = nullptr;
 					if (Obj->TryGetArrayField(TEXT("PerInstanceSMData"), Instances) && Instances)
@@ -935,7 +991,16 @@ namespace
 					}
 					Actor->SetActorLabel(OuterName);
 					Actor->SetFolderPath(UMapJsonPath.Contains(TEXT("_VFX")) ? TEXT("Meshes/VFX") : TEXT("Meshes/Static"));
-					Actor->GetStaticMeshComponent()->SetStaticMesh(LoadedMesh);
+					UStaticMeshComponent* SMC = Actor->GetStaticMeshComponent();
+					SMC->SetStaticMesh(LoadedMesh);
+					SMC->SetMobility(EComponentMobility::Static);
+
+					int32 OverriddenRes = 0;
+					if ((*Props)->TryGetNumberField(TEXT("OverriddenLightMapRes"), OverriddenRes) && OverriddenRes > 0)
+					{
+						SMC->OverriddenLightMapRes = FMath::RoundToInt(OverriddenRes * Config.LightmapResolutionMultiplier);
+						SMC->bOverrideLightMapRes = true;
+					}
 
 					const TArray<TSharedPtr<FJsonValue>>* OverrideMaterials = nullptr;
 					if (Config.bImportMaterials && (*Props)->TryGetArrayField(TEXT("OverrideMaterials"), OverrideMaterials) && OverrideMaterials)
@@ -979,31 +1044,146 @@ namespace
 			if (Config.bImportLights && Type.EndsWith(TEXT("LightComponent")))
 			{
 				AActor* SpawnedLight = nullptr;
+				ULightComponent* LightComp = nullptr;
+
 				if (Type == TEXT("PointLightComponent"))
 				{
-					SpawnedLight = World->SpawnActor<APointLight>(APointLight::StaticClass(), Transform);
+					APointLight* PL = World->SpawnActor<APointLight>(APointLight::StaticClass(), Transform);
+					if (PL)
+					{
+						LightComp = PL->PointLightComponent;
+						float Atten = 0.0f;
+						if ((*Props)->TryGetNumberField(TEXT("AttenuationRadius"), Atten) && Atten > 0.0f)
+						{
+							PL->PointLightComponent->SetAttenuationRadius(Atten);
+						}
+						float SourceRad = 0.0f;
+						if ((*Props)->TryGetNumberField(TEXT("SourceRadius"), SourceRad) && SourceRad > 0.0f)
+						{
+							PL->PointLightComponent->SetSourceRadius(SourceRad);
+						}
+						SpawnedLight = PL;
+					}
 				}
 				else if (Type == TEXT("SpotLightComponent"))
 				{
-					SpawnedLight = World->SpawnActor<ASpotLight>(ASpotLight::StaticClass(), Transform);
+					ASpotLight* SL = World->SpawnActor<ASpotLight>(ASpotLight::StaticClass(), Transform);
+					if (SL)
+					{
+						LightComp = SL->SpotLightComponent;
+						float Atten = 0.0f;
+						if ((*Props)->TryGetNumberField(TEXT("AttenuationRadius"), Atten) && Atten > 0.0f)
+						{
+							SL->SpotLightComponent->SetAttenuationRadius(Atten);
+						}
+						float InnerCone = 0.0f;
+						if ((*Props)->TryGetNumberField(TEXT("InnerConeAngle"), InnerCone))
+						{
+							SL->SpotLightComponent->SetInnerConeAngle(InnerCone);
+						}
+						float OuterCone = 0.0f;
+						if ((*Props)->TryGetNumberField(TEXT("OuterConeAngle"), OuterCone) && OuterCone > 0.0f)
+						{
+							SL->SpotLightComponent->SetOuterConeAngle(OuterCone);
+						}
+						SpawnedLight = SL;
+					}
 				}
 				else if (Type == TEXT("RectLightComponent"))
 				{
-					SpawnedLight = World->SpawnActor<ARectLight>(ARectLight::StaticClass(), Transform);
+					ARectLight* RL = World->SpawnActor<ARectLight>(ARectLight::StaticClass(), Transform);
+					if (RL)
+					{
+						LightComp = RL->RectLightComponent;
+						float Atten = 0.0f;
+						if ((*Props)->TryGetNumberField(TEXT("AttenuationRadius"), Atten) && Atten > 0.0f)
+						{
+							RL->RectLightComponent->SetAttenuationRadius(Atten);
+						}
+						float SourceWidth = 0.0f;
+						if ((*Props)->TryGetNumberField(TEXT("SourceWidth"), SourceWidth) && SourceWidth > 0.0f)
+						{
+							RL->RectLightComponent->SetSourceWidth(SourceWidth);
+						}
+						float SourceHeight = 0.0f;
+						if ((*Props)->TryGetNumberField(TEXT("SourceHeight"), SourceHeight) && SourceHeight > 0.0f)
+						{
+							RL->RectLightComponent->SetSourceHeight(SourceHeight);
+						}
+						SpawnedLight = RL;
+					}
 				}
 				else if (Type == TEXT("SkyLightComponent"))
 				{
-					SpawnedLight = World->SpawnActor<ASkyLight>(ASkyLight::StaticClass(), Transform);
+					ASkyLight* SkyL = World->SpawnActor<ASkyLight>(ASkyLight::StaticClass(), Transform);
+					if (SkyL)
+					{
+						SpawnedLight = SkyL;
+						if (USkyLightComponent* SkyComp = SkyL->GetLightComponent())
+						{
+							SkyComp->SetMobility(EComponentMobility::Static);
+							float IntensityVal = 0.0f;
+							if ((*Props)->TryGetNumberField(TEXT("Intensity"), IntensityVal) && IntensityVal > 0.0f)
+							{
+								SkyComp->SetIntensity(IntensityVal);
+							}
+							float IndirectIntensity = 0.0f;
+							if ((*Props)->TryGetNumberField(TEXT("IndirectLightingIntensity"), IndirectIntensity))
+							{
+								SkyComp->IndirectLightingIntensity = IndirectIntensity;
+							}
+							const TSharedPtr<FJsonObject>* ColorObj = nullptr;
+							if ((*Props)->TryGetObjectField(TEXT("LightColor"), ColorObj) && ColorObj && (*ColorObj).IsValid())
+							{
+								int32 R = 255, G = 255, B = 255;
+								(*ColorObj)->TryGetNumberField(TEXT("R"), R);
+								(*ColorObj)->TryGetNumberField(TEXT("G"), G);
+								(*ColorObj)->TryGetNumberField(TEXT("B"), B);
+								SkyComp->SetLightColor(FLinearColor(FColor(R, G, B, 255)));
+							}
+						}
+					}
 				}
 				else if (Type == TEXT("DirectionalLightComponent"))
 				{
-					SpawnedLight = World->SpawnActor<ADirectionalLight>(ADirectionalLight::StaticClass(), Transform);
+					ADirectionalLight* DL = World->SpawnActor<ADirectionalLight>(ADirectionalLight::StaticClass(), Transform);
+					if (DL)
+					{
+						LightComp = DL->GetComponent();
+						SpawnedLight = DL;
+					}
 				}
 
 				if (SpawnedLight)
 				{
 					SpawnedLight->SetActorLabel(OuterName);
 					SpawnedLight->SetFolderPath(TEXT("Lights"));
+					if (LightComp)
+					{
+						LightComp->SetMobility(EComponentMobility::Static);
+
+						float IntensityVal = 0.0f;
+						if ((*Props)->TryGetNumberField(TEXT("Intensity"), IntensityVal) && IntensityVal > 0.0f)
+						{
+							LightComp->SetIntensity(IntensityVal);
+						}
+
+						float IndirectIntensity = 0.0f;
+						if ((*Props)->TryGetNumberField(TEXT("IndirectLightingIntensity"), IndirectIntensity))
+						{
+							LightComp->SetIndirectLightingIntensity(IndirectIntensity);
+						}
+
+						const TSharedPtr<FJsonObject>* ColorObj = nullptr;
+						if ((*Props)->TryGetObjectField(TEXT("LightColor"), ColorObj) && ColorObj && (*ColorObj).IsValid())
+						{
+							int32 R = 255, G = 255, B = 255;
+							(*ColorObj)->TryGetNumberField(TEXT("R"), R);
+							(*ColorObj)->TryGetNumberField(TEXT("G"), G);
+							(*ColorObj)->TryGetNumberField(TEXT("B"), B);
+							LightComp->SetLightColor(FLinearColor(FColor(R, G, B, 255)));
+						}
+					}
 				}
 				continue;
 			}
@@ -1105,10 +1285,17 @@ namespace
 			{
 				AllAssets.Add(PathConvert(Path));
 			}
-			BuildAssetFile(FPaths::Combine(Paths.Root, TEXT("all_assets.txt")), AllAssets);
-
 			const FString MaterialAssetList = BuildAssetFile(FPaths::Combine(Paths.Root, TEXT("_assets_materials.txt")), MaterialsList);
 			ExtractData(Config, Paths.Materials, MaterialAssetList);
+
+			TSet<FString> MaterialTexturePaths;
+			CollectTexturesFromMaterialFolders(Paths.Materials, Paths.MaterialsOverride, MaterialTexturePaths);
+			for (const FString& TexPath : MaterialTexturePaths)
+			{
+				AllAssets.Add(TexPath);
+			}
+
+			BuildAssetFile(FPaths::Combine(Paths.Root, TEXT("all_assets.txt")), AllAssets);
 			ExtractAssets(Config, Paths);
 			WriteExportMarker(Paths, Config);
 		}
@@ -1119,6 +1306,26 @@ namespace
 
 		if (Config.bImportMaterials)
 		{
+			// Check if any textures need to be exported (e.g. from an existing map export)
+			TSet<FString> MaterialTexturePaths;
+			CollectTexturesFromMaterialFolders(Paths.Materials, Paths.MaterialsOverride, MaterialTexturePaths);
+
+			TArray<FString> MissingTextures;
+			for (const FString& TexRel : MaterialTexturePaths)
+			{
+				const FString LocalPath = FPaths::Combine(Config.AssetsRoot(), TexRel + Config.TextureFormat);
+				if (!FPaths::FileExists(LocalPath))
+				{
+					MissingTextures.Add(TexRel);
+				}
+			}
+
+			if (MissingTextures.Num() > 0)
+			{
+				const FString MissingTexList = BuildAssetFile(FPaths::Combine(Paths.Root, TEXT("_assets_textures_missing.txt")), MissingTextures);
+				ExtractAssets(Config, Paths, MissingTexList);
+			}
+
 			TSet<FString> AllTextures;
 			TArray<FString> MatFiles;
 			ListFiles(Paths.Materials, TEXT("json"), MatFiles);
@@ -1196,17 +1403,13 @@ namespace
 
 bool FUianaImporter::BuildConfig(const UUianaDataSettings& Settings, FUianaImportConfig& OutConfig)
 {
-	const UEnum* MapEnum = FindObject<UEnum>(nullptr, TEXT("/Script/Uiana.WeaponRole"));
-	if (!MapEnum)
+	if (Settings.Map.IsEmpty())
 	{
-		MapEnum = FindFirstObject<UEnum>(TEXT("WeaponRole"), EFindFirstObjectOptions::None);
-	}
-	if (!MapEnum)
-	{
+		UE_LOG(LogTemp, Error, TEXT("Uiana: Map name is empty. Please select a map."));
 		return false;
 	}
 
-	OutConfig.MapName = NormalizeMapName(MapEnum->GetNameStringByValue(Settings.Map.GetValue()));
+	OutConfig.MapName = NormalizeMapName(Settings.Map);
 	OutConfig.AESKey = GDefaultAES;
 	OutConfig.TextureFormat = TEXT(".png");
 	OutConfig.ExportRoot = Settings.ExportFolder.Path;

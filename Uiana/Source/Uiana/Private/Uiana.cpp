@@ -180,16 +180,42 @@ TSharedRef<class SDockTab> FUianaModule::OnSpawnPluginTab(const FSpawnTabArgs& S
 		.HAlign(HAlign_Right)
 		.Padding(2.f, 5.f)
 		[
-			SNew(SButton)
-			.ButtonStyle(FAppStyle::Get(), "FlatButton.Success")
-		.ForegroundColor(FSlateColor::UseForeground())
-		.OnClicked(FOnClicked::CreateRaw(this, &FUianaModule::ExecuteFunction))
-		[
-			SNew(STextBlock)
-			.Justification(ETextJustify::Center)
-		.TextStyle(FAppStyle::Get(), "NormalText.Important")
-		.Text(NSLOCTEXT("LevelSnapshots", "NotificationFormatText_CreationForm_CreateSnapshotButton", "Generate Map"))
-		]
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot()
+			.AutoWidth()
+			.Padding(0.f, 0.f, 8.f, 0.f)
+			[
+				SNew(SButton)
+				.ButtonStyle(FAppStyle::Get(), "FlatButton.Default")
+				.ForegroundColor(FSlateColor::UseForeground())
+				.OnClicked_Lambda([this]() -> FReply {
+					if (Stun)
+					{
+						Stun->RefreshMaps();
+					}
+					return FReply::Handled();
+				})
+				[
+					SNew(STextBlock)
+					.Justification(ETextJustify::Center)
+					.TextStyle(FAppStyle::Get(), "NormalText")
+					.Text(FText::FromString(TEXT("Scan / Refresh Maps")))
+				]
+			]
+			+ SHorizontalBox::Slot()
+			.AutoWidth()
+			[
+				SNew(SButton)
+				.ButtonStyle(FAppStyle::Get(), "FlatButton.Success")
+				.ForegroundColor(FSlateColor::UseForeground())
+				.OnClicked(FOnClicked::CreateRaw(this, &FUianaModule::ExecuteFunction))
+				[
+					SNew(STextBlock)
+					.Justification(ETextJustify::Center)
+					.TextStyle(FAppStyle::Get(), "NormalText.Important")
+					.Text(NSLOCTEXT("LevelSnapshots", "NotificationFormatText_CreationForm_CreateSnapshotButton", "Generate Map"))
+				]
+			]
 		]
 		]
 		]

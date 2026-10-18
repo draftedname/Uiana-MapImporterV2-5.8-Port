@@ -27,6 +27,9 @@
 #include "UObject/SavePackage.h"
 #include "UianaDataSettings.h"
 #include "UianaImporter.h"
+#include "Dom/JsonObject.h"
+#include "Serialization/JsonReader.h"
+#include "Serialization/JsonSerializer.h"
 
 
 UActorComponent* UBPFL::GetComponentByName(AActor* Actor, FName CompName)
@@ -224,11 +227,16 @@ void UBPFL::ImportTextures(TArray<FString> AllTexturesPath)
 		ActorIdx++;
 		FString TexGamePath, TexName;
 		tx.Split(TEXT("\\"), &TexGamePath, &TexName, ESearchCase::IgnoreCase, ESearchDir::FromEnd);
-		FString PathForTextures = FString::Printf(TEXT("/Game/ValorantContent/Textures/%s"), *TexName.Replace(TEXT(".png"),TEXT("")));
+		FString NewTxName = TexName.Replace(TEXT(".png"), TEXT(""));
+		FString PathForTextures = FString::Printf(TEXT("/Game/ValorantContent/Textures/%s"), *NewTxName);
+		const FString PackageFileName = FPackageName::LongPackageNameToFilename(PathForTextures, FPackageName::GetAssetPackageExtension());
+		if (FPaths::FileExists(PackageFileName))
+		{
+			continue;
+		}
 		auto TexPackage = CreatePackage(*PathForTextures);
 		TexPackage->FullyLoad();
 		auto bCancelled = false;
-		auto NewTxName = TexName.Replace(TEXT(".png"),TEXT(""));
 		auto CreatedTexture = TextureFactory->FactoryCreateFile(UTexture2D::StaticClass(), TexPackage, FName(*NewTxName), RF_Public | RF_Standalone, tx, NULL, GWarn, bCancelled); 
 		if (CreatedTexture == nullptr)
 		{
@@ -256,7 +264,6 @@ void UBPFL::ImportTextures(TArray<FString> AllTexturesPath)
 		
 		Tex->UpdateResource();
 		FAssetRegistryModule::AssetCreated(Tex);
-		const FString PackageFileName = FPackageName::LongPackageNameToFilename(TexPackage->GetName(), FPackageName::GetAssetPackageExtension());
 		FSavePackageArgs SaveArgs;
 		UPackage::SavePackage(TexPackage, Tex, *PackageFileName, SaveArgs);
 	}
@@ -279,22 +286,98 @@ void UBPFL::ImportMeshes(TArray<FString> AllMeshesPath, FString ObjectsPath)
 		MeshName = MeshName.Replace(TEXT(".uemodel"), TEXT(""));
 		FString PathForMeshes = FString::Printf(TEXT("/Game/ValorantContent/Meshes/%s"), *MeshName);
 		const FString PackageFileName = FPackageName::LongPackageNameToFilename(PathForMeshes, FPackageName::GetAssetPackageExtension());
+
+		UStaticMesh* StaticMesh = nullptr;
 		if (FPaths::FileExists(PackageFileName))
 		{
-			continue;
+			StaticMesh = Cast<UStaticMesh>(StaticLoadObject(UStaticMesh::StaticClass(), nullptr, *PathForMeshes));
+		}
+		else
+		{
+			auto MeshPackage = CreatePackage(*PathForMeshes);
+			MeshPackage->FullyLoad();
+			auto bCancelled = false;
+			auto CreatedMesh = ModelFactory->FactoryCreateFile(UStaticMesh::StaticClass(), MeshPackage, FName(*MeshName), RF_Public | RF_Standalone, MPath, NULL, GWarn, bCancelled);
+			if (CreatedMesh != nullptr)
+			{
+				StaticMesh = Cast<UStaticMesh>(CreatedMesh);
+				FAssetRegistryModule::AssetCreated(CreatedMesh);
+				FSavePackageArgs SaveArgs;
+				UPackage::SavePackage(MeshPackage, CreatedMesh, *PackageFileName, SaveArgs);
+			}
 		}
 
-		auto MeshPackage = CreatePackage(*PathForMeshes);
-		MeshPackage->FullyLoad();
-		auto bCancelled = false;
-		auto CreatedMesh = ModelFactory->FactoryCreateFile(UStaticMesh::StaticClass(), MeshPackage, FName(*MeshName), RF_Public | RF_Standalone, MPath, NULL, GWarn, bCancelled);
-		if (CreatedMesh == nullptr)
+		if (StaticMesh)
 		{
-			continue;
+			bool bNeedsSave = false;
+			FString JsonFile = FPaths::Combine(ObjectsPath, MeshName + TEXT(".json"));
+			if (FPaths::FileExists(JsonFile))
+			{
+				FString JsonStr;
+				if (FFileHelper::LoadFileToString(JsonStr, *JsonFile))
+				{
+					TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(JsonStr);
+					TArray<TSharedPtr<FJsonValue>> JsonArray;
+					if (FJsonSerializer::Deserialize(Reader, JsonArray))
+					{
+						for (const auto& Val : JsonArray)
+						{
+							TSharedPtr<FJsonObject> Obj = Val->AsObject();
+							if (Obj.IsValid() && Obj->GetStringField(TEXT("Type")) == TEXT("StaticMesh"))
+							{
+								const TSharedPtr<FJsonObject>* Props = nullptr;
+								if (Obj->TryGetObjectField(TEXT("Properties"), Props) && Props && (*Props).IsValid())
+								{
+									int32 LMRes = 0;
+									if ((*Props)->TryGetNumberField(TEXT("LightMapResolution"), LMRes) && LMRes > 0)
+									{
+										if (StaticMesh->GetLightMapResolution() != LMRes)
+										{
+											StaticMesh->SetLightMapResolution(LMRes);
+											bNeedsSave = true;
+										}
+									}
+									int32 LMCoord = 1;
+									if ((*Props)->TryGetNumberField(TEXT("LightMapCoordinateIndex"), LMCoord))
+									{
+										if (StaticMesh->GetLightMapCoordinateIndex() != LMCoord)
+										{
+											StaticMesh->SetLightMapCoordinateIndex(LMCoord);
+											bNeedsSave = true;
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+			else
+			{
+				if (StaticMesh->GetLightMapCoordinateIndex() == 0)
+				{
+					StaticMesh->SetLightMapCoordinateIndex(1);
+					bNeedsSave = true;
+				}
+				if (StaticMesh->GetLightMapResolution() <= 4)
+				{
+					StaticMesh->SetLightMapResolution(64);
+					bNeedsSave = true;
+				}
+			}
+
+			if (bNeedsSave)
+			{
+				StaticMesh->MarkPackageDirty();
+				UPackage* Pkg = StaticMesh->GetPackage();
+				if (Pkg)
+				{
+					FSavePackageArgs SaveArgs;
+					UPackage::SavePackage(Pkg, StaticMesh, *PackageFileName, SaveArgs);
+				}
+			}
 		}
-		FAssetRegistryModule::AssetCreated(CreatedMesh);
-		FSavePackageArgs SaveArgs;
-		UPackage::SavePackage(MeshPackage, CreatedMesh, *PackageFileName, SaveArgs);
+
 		ImportTask.DefaultMessage = FText::FromString(FString::Printf(TEXT("Importing Mesh : %d of %d: %s"), ActorIdx + 1, AllMeshesPath.Num() + 1, *MeshName));
 		ImportTask.EnterProgressFrame();
 	}
@@ -338,19 +421,7 @@ bool UBPFL::ImportValorantMap(FString MapName, FString PaksFolder, FString Expor
 	Settings->UseSubLevels = true;
 	Settings->LightmapResolutionMultiplier = 1.0f;
 
-	const UEnum* MapEnum = FindObject<UEnum>(nullptr, TEXT("/Script/Uiana.WeaponRole"));
-	if (!MapEnum)
-	{
-		MapEnum = FindFirstObject<UEnum>(TEXT("WeaponRole"), EFindFirstObjectOptions::None);
-	}
-	if (MapEnum)
-	{
-		int64 Val = MapEnum->GetValueByNameString(MapName);
-		if (Val != INDEX_NONE)
-		{
-			Settings->Map = static_cast<WeaponRole>(Val);
-		}
-	}
+	Settings->Map = MapName;
 
 	return FUianaImporter::Run(*Settings);
 }
