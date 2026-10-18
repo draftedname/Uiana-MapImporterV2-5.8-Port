@@ -773,16 +773,31 @@ namespace
 				ParentName = TEXT("BaseEnv_Unlit_Texture_MAT_V4");
 			}
 
-			FString ParentPath = FString::Printf(TEXT("/Uiana/Materials/%s.%s"), *ParentName, *ParentName);
+			UMaterialInterface* ParentMat = nullptr;
 			if (MaterialName.StartsWith(TEXT("M_Sky_")))
 			{
 				const FString DirectSky = FString::Printf(TEXT("/Uiana/Materials/%s.%s"), *MaterialName, *MaterialName);
-				if (UMaterialInterface* SkyMaster = Cast<UMaterialInterface>(StaticLoadObject(UMaterialInterface::StaticClass(), nullptr, *DirectSky)))
+				ParentMat = Cast<UMaterialInterface>(StaticLoadObject(UMaterialInterface::StaticClass(), nullptr, *DirectSky));
+				if (!ParentMat)
 				{
-					ParentPath = DirectSky;
+					ParentMat = Cast<UMaterialInterface>(StaticLoadObject(UMaterialInterface::StaticClass(), nullptr, TEXT("/Uiana/Materials/BaseEnv_Unlit_Texture_MAT_V4.BaseEnv_Unlit_Texture_MAT_V4")));
 				}
 			}
-			if (UMaterialInterface* ParentMat = Cast<UMaterialInterface>(StaticLoadObject(UMaterialInterface::StaticClass(), nullptr, *ParentPath)))
+			if (!ParentMat && !ParentName.IsEmpty() && ParentName != TEXT("BaseEnv_MAT_V4"))
+			{
+				const FString ValoMatPath = FString::Printf(TEXT("/Game/ValorantContent/Materials/%s.%s"), *ParentName, *ParentName);
+				ParentMat = Cast<UMaterialInterface>(StaticLoadObject(UMaterialInterface::StaticClass(), nullptr, *ValoMatPath));
+			}
+			if (!ParentMat && !ParentName.IsEmpty())
+			{
+				const FString PluginMatPath = FString::Printf(TEXT("/Uiana/Materials/%s.%s"), *ParentName, *ParentName);
+				ParentMat = Cast<UMaterialInterface>(StaticLoadObject(UMaterialInterface::StaticClass(), nullptr, *PluginMatPath));
+			}
+			if (!ParentMat)
+			{
+				ParentMat = Cast<UMaterialInterface>(StaticLoadObject(UMaterialInterface::StaticClass(), nullptr, TEXT("/Uiana/Materials/BaseEnv_MAT_V4.BaseEnv_MAT_V4")));
+			}
+			if (ParentMat)
 			{
 				MIC->SetParentEditorOnly(ParentMat);
 			}
@@ -1011,6 +1026,7 @@ namespace
 					{
 						Actor->SetFolderPath(TEXT("Collision/SuperGrid"));
 						Actor->SetActorHiddenInGame(true);
+						Actor->SetIsTemporarilyHiddenInEditor(true);
 						Actor->HismComponent->SetVisibility(false, true);
 						Actor->HismComponent->SetHiddenInGame(true);
 						Actor->HismComponent->SetCastShadow(false);
@@ -1126,6 +1142,7 @@ namespace
 					{
 						Actor->SetFolderPath(TEXT("Collision/SuperGrid"));
 						Actor->SetActorHiddenInGame(true);
+						Actor->SetIsTemporarilyHiddenInEditor(true);
 						SMC->SetVisibility(false, true);
 						SMC->SetHiddenInGame(true);
 						SMC->SetCastShadow(false);
@@ -1236,6 +1253,10 @@ namespace
 						{
 							PL->PointLightComponent->SetAttenuationRadius(Atten);
 						}
+						else
+						{
+							PL->PointLightComponent->SetAttenuationRadius(350.0f);
+						}
 						float SourceRad = 0.0f;
 						if ((*Props)->TryGetNumberField(TEXT("SourceRadius"), SourceRad) && SourceRad > 0.0f)
 						{
@@ -1254,6 +1275,10 @@ namespace
 						if ((*Props)->TryGetNumberField(TEXT("AttenuationRadius"), Atten) && Atten > 0.0f)
 						{
 							SL->SpotLightComponent->SetAttenuationRadius(Atten);
+						}
+						else
+						{
+							SL->SpotLightComponent->SetAttenuationRadius(450.0f);
 						}
 						float InnerCone = 0.0f;
 						if ((*Props)->TryGetNumberField(TEXT("InnerConeAngle"), InnerCone))
@@ -1278,6 +1303,10 @@ namespace
 						if ((*Props)->TryGetNumberField(TEXT("AttenuationRadius"), Atten) && Atten > 0.0f)
 						{
 							RL->RectLightComponent->SetAttenuationRadius(Atten);
+						}
+						else
+						{
+							RL->RectLightComponent->SetAttenuationRadius(350.0f);
 						}
 						float SourceWidth = 0.0f;
 						if ((*Props)->TryGetNumberField(TEXT("SourceWidth"), SourceWidth) && SourceWidth > 0.0f)
@@ -1327,10 +1356,18 @@ namespace
 				}
 				else if (Type == TEXT("DirectionalLightComponent"))
 				{
+					if (OuterName.Contains(TEXT("directional_look_up")))
+					{
+						continue;
+					}
 					ADirectionalLight* DL = World->SpawnActor<ADirectionalLight>(ADirectionalLight::StaticClass(), Transform);
 					if (DL)
 					{
 						LightComp = DL->GetComponent();
+						if (UDirectionalLightComponent* DLC = Cast<UDirectionalLightComponent>(LightComp))
+						{
+							DLC->SetForwardShadingPriority(1);
+						}
 						SpawnedLight = DL;
 					}
 				}
@@ -1354,9 +1391,13 @@ namespace
 								}
 								IntensityVal = FMath::Clamp(IntensityVal, 3.5f, 6.0f);
 							}
-							else if (IntensityVal > 500.0f)
+							else
 							{
-								IntensityVal /= 100.0f;
+								if (IntensityVal > 500.0f)
+								{
+									IntensityVal /= 100.0f;
+								}
+								IntensityVal = FMath::Clamp(IntensityVal, 0.1f, 15.0f);
 							}
 						}
 						LightComp->SetIntensity(IntensityVal);
@@ -1364,7 +1405,7 @@ namespace
 						float IndirectIntensity = 0.0f;
 						if ((*Props)->TryGetNumberField(TEXT("IndirectLightingIntensity"), IndirectIntensity) && IndirectIntensity > 0.0f)
 						{
-							LightComp->SetIndirectLightingIntensity(IndirectIntensity);
+							LightComp->SetIndirectLightingIntensity(FMath::Clamp(IndirectIntensity, 0.0f, 1.0f));
 						}
 						else
 						{
@@ -1638,6 +1679,45 @@ namespace
 			if (MeshSources.Num() > 0)
 			{
 				UBPFL::ImportMeshes(MeshSources, Paths.Objects);
+			}
+
+			if (Config.bImportMaterials)
+			{
+				TArray<FString> MeshFiles;
+				ListFiles(Paths.Objects, TEXT("uemodel"), MeshFiles);
+				for (const FString& MeshFile : MeshFiles)
+				{
+					const FString MeshBaseName = FPaths::GetBaseFilename(MeshFile);
+					const FString MeshAssetPath = FString::Printf(TEXT("/Game/ValorantContent/Meshes/%s.%s"), *MeshBaseName, *MeshBaseName);
+					if (UStaticMesh* SM = Cast<UStaticMesh>(StaticLoadObject(UStaticMesh::StaticClass(), nullptr, *MeshAssetPath)))
+					{
+						bool bMeshModified = false;
+						const TArray<FStaticMaterial>& StaticMats = SM->GetStaticMaterials();
+						for (int32 SlotIdx = 0; SlotIdx < StaticMats.Num(); ++SlotIdx)
+						{
+							if (!SM->GetMaterial(SlotIdx))
+							{
+								const FString SlotName = StaticMats[SlotIdx].MaterialSlotName.ToString();
+								const FString MatPath = FString::Printf(TEXT("/Game/ValorantContent/Materials/%s.%s"), *SlotName, *SlotName);
+								UMaterialInterface* SlotMat = Cast<UMaterialInterface>(StaticLoadObject(UMaterialInterface::StaticClass(), nullptr, *MatPath));
+								if (!SlotMat)
+								{
+									const FString PluginMatPath = FString::Printf(TEXT("/Uiana/Materials/%s.%s"), *SlotName, *SlotName);
+									SlotMat = Cast<UMaterialInterface>(StaticLoadObject(UMaterialInterface::StaticClass(), nullptr, *PluginMatPath));
+								}
+								if (SlotMat)
+								{
+									SM->SetMaterial(SlotIdx, SlotMat);
+									bMeshModified = true;
+								}
+							}
+						}
+						if (bMeshModified)
+						{
+							SM->MarkPackageDirty();
+						}
+					}
+				}
 			}
 		}
 
