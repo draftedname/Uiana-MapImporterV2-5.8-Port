@@ -869,8 +869,23 @@ namespace
 					const FString TexturePath = FString::Printf(TEXT("/Game/ValorantContent/Textures/%s.%s"), *TextureName, *TextureName);
 					if (UTexture* Texture = Cast<UTexture>(StaticLoadObject(UTexture::StaticClass(), nullptr, *TexturePath)))
 					{
-						const FName ParamName((*ParamInfo)->GetStringField(TEXT("Name")).ToLower());
+						const FString RawParamName = (*ParamInfo)->GetStringField(TEXT("Name")).ToLower();
+						const FName ParamName(*RawParamName);
 						UMaterialEditingLibrary::SetMaterialInstanceTextureParameterValue(MIC, ParamName, Texture);
+
+						// Map common Valorant aliases to standard Uiana master material parameter names
+						if (RawParamName == TEXT("materialtexture") || RawParamName == TEXT("diffusetex") || RawParamName == TEXT("diffuse a") || RawParamName == TEXT("albedo") || RawParamName == TEXT("texture rgb"))
+						{
+							UMaterialEditingLibrary::SetMaterialInstanceTextureParameterValue(MIC, FName(TEXT("diffuse")), Texture);
+						}
+						else if (RawParamName == TEXT("additonalnormal") || RawParamName == TEXT("texture a normal") || RawParamName == TEXT("normal a"))
+						{
+							UMaterialEditingLibrary::SetMaterialInstanceTextureParameterValue(MIC, FName(TEXT("normal")), Texture);
+						}
+						else if (RawParamName == TEXT("mra a") || RawParamName == TEXT("mra_texture"))
+						{
+							UMaterialEditingLibrary::SetMaterialInstanceTextureParameterValue(MIC, FName(TEXT("mra")), Texture);
+						}
 					}
 				}
 			}
@@ -1608,7 +1623,8 @@ namespace
 			TArray<FString> MissingTextures;
 			for (const FString& TexRel : MaterialTexturePaths)
 			{
-				const FString LocalPath = FPaths::Combine(Config.AssetsRoot(), TexRel + Config.TextureFormat);
+				const FString CleanTexRel = (TexRel.StartsWith(TEXT("/")) || TexRel.StartsWith(TEXT("\\"))) ? TexRel.RightChop(1) : TexRel;
+				const FString LocalPath = FPaths::Combine(Config.AssetsRoot(), CleanTexRel + Config.TextureFormat);
 				if (!FPaths::FileExists(LocalPath))
 				{
 					MissingTextures.Add(TexRel);
