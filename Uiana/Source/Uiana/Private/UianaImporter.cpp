@@ -804,7 +804,7 @@ namespace
 			if ((*Props)->TryGetObjectField(TEXT("Parent"), ParentObj) && ParentObj && (*ParentObj).IsValid())
 			{
 				ParentName = GetRefName(*ParentObj);
-				if (ParentName.IsEmpty() || ParentName == TEXT("BaseOpacity_RGB_Env_MAT") || ParentName == TEXT("BaseOpacitySpecEnv_MAT"))
+				if (ParentName.IsEmpty() || ParentName == TEXT("BaseOpacity_RGB_Env_MAT") || ParentName == TEXT("BaseOpacitySpecEnv_MAT") || ParentName == TEXT("HorizontalParallax"))
 				{
 					ParentName = TEXT("BaseEnv_MAT_V4");
 				}
@@ -1338,6 +1338,36 @@ namespace
 									if (FallbackMat)
 									{
 										Comp->SetMaterial(SlotIdx, FallbackMat);
+									}
+								}
+							}
+						}
+					}
+
+					// Forward Shading DX11 guard: HISM cannot render mixed opaque and translucent sections without crashing FBasePassMeshProcessor
+					if (Comp->IsA<UHierarchicalInstancedStaticMeshComponent>())
+					{
+						bool bHasOpaque = false;
+						for (int32 SlotIdx = 0; SlotIdx < Comp->GetNumMaterials(); ++SlotIdx)
+						{
+							UMaterialInterface* M = Comp->GetMaterial(SlotIdx);
+							if (M && (M->GetBlendMode() == BLEND_Opaque || M->GetBlendMode() == BLEND_Masked))
+							{
+								bHasOpaque = true;
+								break;
+							}
+						}
+						if (bHasOpaque)
+						{
+							for (int32 SlotIdx = 0; SlotIdx < Comp->GetNumMaterials(); ++SlotIdx)
+							{
+								UMaterialInterface* M = Comp->GetMaterial(SlotIdx);
+								if (M && M->GetBlendMode() != BLEND_Opaque && M->GetBlendMode() != BLEND_Masked)
+								{
+									UMaterialInterface* SafeMat = Cast<UMaterialInterface>(StaticLoadObject(UMaterialInterface::StaticClass(), nullptr, TEXT("/Uiana/Materials/BaseEnv_MAT_V4.BaseEnv_MAT_V4")));
+									if (SafeMat)
+									{
+										Comp->SetMaterial(SlotIdx, SafeMat);
 									}
 								}
 							}
