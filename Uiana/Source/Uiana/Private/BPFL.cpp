@@ -356,10 +356,32 @@ void UBPFL::ImportMeshes(TArray<FString> AllMeshesPath, FString ObjectsPath)
 										{
 											const TSharedPtr<FJsonObject> MatObj = (*StaticMaterials)[SlotIdx]->AsObject();
 											if (!MatObj.IsValid()) continue;
+
+											FString JsonSlotName = MatObj->GetStringField(TEXT("MaterialSlotName"));
+											FString JsonImportedSlotName = MatObj->GetStringField(TEXT("ImportedMaterialSlotName"));
+
+											if (!JsonSlotName.IsEmpty() && JsonSlotName != TEXT("WorldGridMaterial"))
+											{
+												if (StaticMesh->GetStaticMaterials()[SlotIdx].MaterialSlotName != FName(*JsonSlotName))
+												{
+													StaticMesh->GetStaticMaterials()[SlotIdx].MaterialSlotName = FName(*JsonSlotName);
+													bNeedsSave = true;
+												}
+											}
+											if (!JsonImportedSlotName.IsEmpty())
+											{
+												if (StaticMesh->GetStaticMaterials()[SlotIdx].ImportedMaterialSlotName != FName(*JsonImportedSlotName))
+												{
+													StaticMesh->GetStaticMaterials()[SlotIdx].ImportedMaterialSlotName = FName(*JsonImportedSlotName);
+													bNeedsSave = true;
+												}
+											}
+
+											FString RawMatName;
 											const TSharedPtr<FJsonObject>* MatInterface = nullptr;
 											if (MatObj->TryGetObjectField(TEXT("MaterialInterface"), MatInterface) && MatInterface && (*MatInterface).IsValid())
 											{
-												FString RawMatName = (*MatInterface)->GetStringField(TEXT("ObjectName"));
+												RawMatName = (*MatInterface)->GetStringField(TEXT("ObjectName"));
 												int32 SingleQuote = INDEX_NONE;
 												if (RawMatName.FindChar(TEXT('\''), SingleQuote))
 												{
@@ -369,23 +391,57 @@ void UBPFL::ImportMeshes(TArray<FString> AllMeshesPath, FString ObjectsPath)
 														RawMatName = RawMatName.Left(SingleQuote);
 													}
 												}
-												if (RawMatName == TEXT("Stone_M2_Steps_MI1"))
+											}
+
+											auto IsDccPlaceholderName = [](const FString& InName) -> bool
+											{
+												return InName.IsEmpty() ||
+													   InName == TEXT("WorldGridMaterial") ||
+													   InName == TEXT("DefaultMaterial") ||
+													   InName.StartsWith(TEXT("MaterialSlot_")) ||
+													   InName.StartsWith(TEXT("lambert"), ESearchCase::IgnoreCase) ||
+													   InName.Contains(TEXT("Default"), ESearchCase::IgnoreCase) ||
+													   InName.StartsWith(TEXT("phong"), ESearchCase::IgnoreCase) ||
+													   InName.StartsWith(TEXT("blinn"), ESearchCase::IgnoreCase);
+											};
+
+											if (RawMatName.IsEmpty() || RawMatName == TEXT("WorldGridMaterial") || RawMatName == TEXT("DefaultMaterial"))
+											{
+												if (!JsonSlotName.IsEmpty() && !IsDccPlaceholderName(JsonSlotName))
 												{
-													RawMatName = TEXT("Stone_M2_Steps_MI");
+													RawMatName = JsonSlotName;
 												}
-												RawMatName = ResolveCleanMaterialVariation(RawMatName);
-												if (!RawMatName.IsEmpty() && RawMatName != TEXT("WorldGridMaterial") && RawMatName != TEXT("DefaultMaterial"))
+												else if (MeshName == TEXT("MidFloor_1"))
 												{
-													FString MatPath = FString::Printf(TEXT("/Game/ValorantContent/Materials/%s.%s"), *RawMatName, *RawMatName);
-													UMaterialInterface* Mat = Cast<UMaterialInterface>(StaticLoadObject(UMaterialInterface::StaticClass(), nullptr, *MatPath));
-													if (!Mat)
+													RawMatName = (SlotIdx == 0) ? TEXT("Brick_M6_HerringBoneBroken_MI") : TEXT("Brick_M6_HerringBoneAsphalt_MI");
+												}
+											}
+
+											if (RawMatName == TEXT("Stone_M2_Steps_MI1"))
+											{
+												RawMatName = TEXT("Stone_M2_Steps_MI");
+											}
+											RawMatName = ResolveCleanMaterialVariation(RawMatName);
+											if (!RawMatName.IsEmpty() && RawMatName != TEXT("WorldGridMaterial") && RawMatName != TEXT("DefaultMaterial"))
+											{
+												FString MatPath = FString::Printf(TEXT("/Game/ValorantContent/Materials/%s.%s"), *RawMatName, *RawMatName);
+												UMaterialInterface* Mat = Cast<UMaterialInterface>(StaticLoadObject(UMaterialInterface::StaticClass(), nullptr, *MatPath));
+												if (!Mat)
+												{
+													MatPath = FString::Printf(TEXT("/Uiana/Materials/%s.%s"), *RawMatName, *RawMatName);
+													Mat = Cast<UMaterialInterface>(StaticLoadObject(UMaterialInterface::StaticClass(), nullptr, *MatPath));
+												}
+												if (Mat && (StaticMesh->GetMaterial(SlotIdx) != Mat || StaticMesh->GetStaticMaterials()[SlotIdx].MaterialInterface != Mat))
+												{
+													StaticMesh->SetMaterial(SlotIdx, Mat);
+													StaticMesh->GetStaticMaterials()[SlotIdx].MaterialInterface = Mat;
+													bNeedsSave = true;
+												}
+												if (Mat && (JsonSlotName.StartsWith(TEXT("lambert")) || JsonSlotName.Contains(TEXT("Default")) || JsonSlotName.StartsWith(TEXT("MaterialSlot_")) || JsonSlotName == TEXT("WorldGridMaterial")))
+												{
+													if (StaticMesh->GetStaticMaterials()[SlotIdx].MaterialSlotName != FName(*Mat->GetName()))
 													{
-														MatPath = FString::Printf(TEXT("/Uiana/Materials/%s.%s"), *RawMatName, *RawMatName);
-														Mat = Cast<UMaterialInterface>(StaticLoadObject(UMaterialInterface::StaticClass(), nullptr, *MatPath));
-													}
-													if (Mat && StaticMesh->GetMaterial(SlotIdx) != Mat)
-													{
-														StaticMesh->SetMaterial(SlotIdx, Mat);
+														StaticMesh->GetStaticMaterials()[SlotIdx].MaterialSlotName = FName(*Mat->GetName());
 														bNeedsSave = true;
 													}
 												}
@@ -490,6 +546,72 @@ FString UBPFL::ResolveCleanMaterialVariation(const FString& InMatName)
 		return TEXT("Stone_M2_Steps_MI");
 	}
 
+	auto CheckExists = [](const FString& Candidate) -> bool
+	{
+		if (Candidate.IsEmpty())
+		{
+			return false;
+		}
+		const FString GamePath = FString::Printf(TEXT("/Game/ValorantContent/Materials/%s.%s"), *Candidate, *Candidate);
+		if (FPackageName::DoesPackageExist(FString::Printf(TEXT("/Game/ValorantContent/Materials/%s"), *Candidate)) ||
+			StaticLoadObject(UMaterialInterface::StaticClass(), nullptr, *GamePath) != nullptr)
+		{
+			return true;
+		}
+
+		const FString PluginPath = FString::Printf(TEXT("/Uiana/Materials/%s.%s"), *Candidate, *Candidate);
+		if (FPackageName::DoesPackageExist(FString::Printf(TEXT("/Uiana/Materials/%s"), *Candidate)) ||
+			StaticLoadObject(UMaterialInterface::StaticClass(), nullptr, *PluginPath) != nullptr)
+		{
+			return true;
+		}
+		return false;
+	};
+
+	// 1. StoneTile / SquareTiles blends (e.g. Stone_M4_StoneTileGrassBlend, Stone_M4_StoneTileMossBlend, Stone_M4_StoneTileMudBlend)
+	if (InMatName.Contains(TEXT("StoneTile")) || InMatName.Contains(TEXT("SquareTile")) ||
+		(InMatName.StartsWith(TEXT("Stone_")) && InMatName.Contains(TEXT("Tile")) && InMatName.Contains(TEXT("Blend"))))
+	{
+		if (InMatName.Contains(TEXT("Blend")) || InMatName.Contains(TEXT("Grass")) ||
+			InMatName.Contains(TEXT("Moss")) || InMatName.Contains(TEXT("Mud")) || InMatName.Contains(TEXT("Dirt")))
+		{
+			if (CheckExists(TEXT("Stone_M1_SquareTiles_MI")))
+			{
+				return TEXT("Stone_M1_SquareTiles_MI");
+			}
+		}
+	}
+
+	// 2. HerringBone variations (e.g. Brick_M6_HerringBoneGrass_MI, Brick_M6_HerringBoneWater_MI, Brick_M6_HerringBoneAsphalt_MI)
+	if (InMatName.Contains(TEXT("HerringBone")))
+	{
+		if (InMatName.Contains(TEXT("Grass")) || InMatName.Contains(TEXT("Water")) || InMatName.Contains(TEXT("Mud")))
+		{
+			if (CheckExists(TEXT("Brick_M6_HerringBoneBroken_MI")))
+			{
+				return TEXT("Brick_M6_HerringBoneBroken_MI");
+			}
+			if (CheckExists(TEXT("Brick_M6_HerringBone_MI")))
+			{
+				return TEXT("Brick_M6_HerringBone_MI");
+			}
+		}
+	}
+
+	// 3. Concrete blends (e.g. Concrete_M0_BareBlend_MI)
+	if (InMatName.StartsWith(TEXT("Concrete_"), ESearchCase::IgnoreCase) && InMatName.Contains(TEXT("Blend")))
+	{
+		if (CheckExists(TEXT("Concrete_M0_MI")))
+		{
+			return TEXT("Concrete_M0_MI");
+		}
+		if (CheckExists(TEXT("Concrete_M0_Bare_MI")))
+		{
+			return TEXT("Concrete_M0_Bare_MI");
+		}
+	}
+
+	// Do not strip nature materials that are standalone
 	if (InMatName.StartsWith(TEXT("Grass_"), ESearchCase::IgnoreCase) ||
 		InMatName.StartsWith(TEXT("Dirt_"), ESearchCase::IgnoreCase) ||
 		InMatName.StartsWith(TEXT("Sand_"), ESearchCase::IgnoreCase))
@@ -497,42 +619,68 @@ FString UBPFL::ResolveCleanMaterialVariation(const FString& InMatName)
 		return InMatName;
 	}
 
-	const bool bHasGrass = InMatName.Contains(TEXT("Grass"));
-	const bool bHasDirt = InMatName.Contains(TEXT("Dirt")) && !InMatName.Contains(TEXT("Dirty"));
-	const bool bHasSand = InMatName.Contains(TEXT("Sand"));
-
-	if (!bHasGrass && !bHasDirt && !bHasSand)
-	{
-		return InMatName;
-	}
-
-	TArray<FString> VariationWords;
-	if (bHasGrass) { VariationWords.Add(TEXT("_Grass")); VariationWords.Add(TEXT("Grass_")); VariationWords.Add(TEXT("Grass")); }
-	if (bHasDirt)  { VariationWords.Add(TEXT("_Dirt"));  VariationWords.Add(TEXT("Dirt_"));  VariationWords.Add(TEXT("Dirt")); }
-	if (bHasSand)  { VariationWords.Add(TEXT("_Sand"));  VariationWords.Add(TEXT("Sand_"));  VariationWords.Add(TEXT("Sand")); }
+	static const TArray<FString> VariationWords = {
+		TEXT("_DarkBlend"), TEXT("DarkBlend_"), TEXT("DarkBlend"),
+		TEXT("_DirtBlend"), TEXT("DirtBlend_"), TEXT("DirtBlend"),
+		TEXT("_BareBlend"), TEXT("BareBlend_"), TEXT("BareBlend"),
+		TEXT("_GrassBlend"), TEXT("GrassBlend_"), TEXT("GrassBlend"),
+		TEXT("_MossBlend"), TEXT("MossBlend_"), TEXT("MossBlend"),
+		TEXT("_MudBlend"), TEXT("MudBlend_"), TEXT("MudBlend"),
+		TEXT("_Blend"), TEXT("Blend_"), TEXT("Blend"),
+		TEXT("_Grass"), TEXT("Grass_"), TEXT("Grass"),
+		TEXT("_Dirt"), TEXT("Dirt_"), TEXT("Dirt"),
+		TEXT("_Sand"), TEXT("Sand_"), TEXT("Sand"),
+		TEXT("_Moss"), TEXT("Moss_"), TEXT("Moss"),
+		TEXT("_Mud"), TEXT("Mud_"), TEXT("Mud"),
+		TEXT("_Water"), TEXT("Water_"), TEXT("Water"),
+		TEXT("_Gravel"), TEXT("Gravel_"), TEXT("Gravel")
+	};
 
 	for (const FString& Word : VariationWords)
 	{
 		if (InMatName.Contains(Word))
 		{
+			if (Word.Contains(TEXT("Dirt")) && InMatName.Contains(TEXT("Dirty")))
+			{
+				continue;
+			}
+
 			FString Candidate = InMatName.Replace(*Word, TEXT(""));
+			Candidate.ReplaceInline(TEXT("__"), TEXT("_"));
 			if (Candidate.IsEmpty() || Candidate == InMatName)
 			{
 				continue;
 			}
 
-			const FString GamePath = FString::Printf(TEXT("/Game/ValorantContent/Materials/%s.%s"), *Candidate, *Candidate);
-			if (FPackageName::DoesPackageExist(FString::Printf(TEXT("/Game/ValorantContent/Materials/%s"), *Candidate)) ||
-				StaticLoadObject(UMaterialInterface::StaticClass(), nullptr, *GamePath) != nullptr)
+			if (CheckExists(Candidate))
 			{
 				return Candidate;
 			}
 
-			const FString PluginPath = FString::Printf(TEXT("/Uiana/Materials/%s.%s"), *Candidate, *Candidate);
-			if (FPackageName::DoesPackageExist(FString::Printf(TEXT("/Uiana/Materials/%s"), *Candidate)) ||
-				StaticLoadObject(UMaterialInterface::StaticClass(), nullptr, *PluginPath) != nullptr)
+			if (!Candidate.EndsWith(TEXT("_MI")) && InMatName.EndsWith(TEXT("_MI")))
 			{
-				return Candidate;
+				const FString CandidateWithMI = Candidate + TEXT("_MI");
+				if (CheckExists(CandidateWithMI))
+				{
+					return CandidateWithMI;
+				}
+			}
+
+			for (int32 MIdx = 0; MIdx <= 9; ++MIdx)
+			{
+				const FString FromM = FString::Printf(TEXT("_M%d_"), MIdx);
+				if (Candidate.Contains(FromM))
+				{
+					FString CandM1 = Candidate.Replace(*FromM, TEXT("_M1_"));
+					if (!CandM1.EndsWith(TEXT("_MI")) && InMatName.EndsWith(TEXT("_MI")))
+					{
+						CandM1 += TEXT("_MI");
+					}
+					if (CheckExists(CandM1))
+					{
+						return CandM1;
+					}
+				}
 			}
 		}
 	}
