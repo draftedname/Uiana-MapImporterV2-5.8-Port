@@ -374,7 +374,8 @@ namespace
 			return nullptr;
 		}
 
-		const FString MatName = (ObjectName == TEXT("Stone_M2_Steps_MI1")) ? TEXT("Stone_M2_Steps_MI") : ObjectName;
+		FString MatName = (ObjectName == TEXT("Stone_M2_Steps_MI1")) ? TEXT("Stone_M2_Steps_MI") : ObjectName;
+		MatName = UBPFL::ResolveCleanMaterialVariation(MatName);
 		if (MatName.StartsWith(TEXT("M_Sky_")))
 		{
 			const FString PluginSkyPath = FString::Printf(TEXT("/Uiana/Materials/%s.%s"), *MatName, *MatName);
@@ -686,9 +687,9 @@ namespace
 							FString ObjPath = (*PVal)->GetStringField(TEXT("ObjectPath"));
 							if (!ObjPath.IsEmpty())
 							{
-								int32 Dot = INDEX_NONE;
-								if (ObjPath.FindChar(TEXT('.'), Dot)) ObjPath = ObjPath.Left(Dot);
-								OutTexturePaths.Add(PathConvert(ObjPath));
+								FString Normalized = ToBackslashObjectPath(ObjPath);
+								Normalized = PathConvert(Normalized);
+								OutTexturePaths.Add(Normalized);
 							}
 						}
 					}
@@ -941,11 +942,22 @@ namespace
 					}
 					const FString RawParamName = (*ParamInfo)->GetStringField(TEXT("Name")).ToLower();
 					const FName ParamName(*RawParamName);
-					const FLinearColor Color(
+					FLinearColor Color(
 						(*ParamValue)->GetNumberField(TEXT("R")),
 						(*ParamValue)->GetNumberField(TEXT("G")),
 						(*ParamValue)->GetNumberField(TEXT("B")),
 						(*ParamValue)->GetNumberField(TEXT("A")));
+
+					// Clamp non-emissive diffuse/tint multipliers to [0.0, 1.0] to prevent PBR blowout (e.g. AScaffold_0_M0_Kit_MI with DiffuseColor 2.0)
+					if (RawParamName == TEXT("diffusecolor") || RawParamName == TEXT("diffuse color") ||
+					    RawParamName == TEXT("tint") || RawParamName == TEXT("color mult") ||
+					    RawParamName == TEXT("layer a tint") || RawParamName == TEXT("layer b tint"))
+					{
+						Color.R = FMath::Clamp(Color.R, 0.0f, 1.0f);
+						Color.G = FMath::Clamp(Color.G, 0.0f, 1.0f);
+						Color.B = FMath::Clamp(Color.B, 0.0f, 1.0f);
+					}
+
 					UMaterialEditingLibrary::SetMaterialInstanceVectorParameterValue(MIC, ParamName, Color);
 
 					if (ParentName == TEXT("BaseOpacity_RGB_Env_MAT"))
@@ -1317,7 +1329,7 @@ namespace
 								}
 								else
 								{
-									const FString SlotName = StaticMats[SlotIdx].MaterialSlotName.ToString();
+									const FString SlotName = UBPFL::ResolveCleanMaterialVariation(StaticMats[SlotIdx].MaterialSlotName.ToString());
 									const FString MatPath = FString::Printf(TEXT("/Game/ValorantContent/Materials/%s.%s"), *SlotName, *SlotName);
 									if (UMaterialInterface* FallbackMat = Cast<UMaterialInterface>(StaticLoadObject(UMaterialInterface::StaticClass(), nullptr, *MatPath)))
 									{
@@ -1394,7 +1406,7 @@ namespace
 								}
 								else
 								{
-									const FString SlotName = StaticMats[SlotIdx].MaterialSlotName.ToString();
+									const FString SlotName = UBPFL::ResolveCleanMaterialVariation(StaticMats[SlotIdx].MaterialSlotName.ToString());
 									const FString MatPath = FString::Printf(TEXT("/Game/ValorantContent/Materials/%s.%s"), *SlotName, *SlotName);
 									if (UMaterialInterface* FallbackMat = Cast<UMaterialInterface>(StaticLoadObject(UMaterialInterface::StaticClass(), nullptr, *MatPath)))
 									{
@@ -1941,6 +1953,22 @@ namespace
 				{
 					continue;
 				}
+				if (Config.bFilterMeshes)
+				{
+					bool bSkip = false;
+					for (const FString& Prefix : Config.MeshFilterPrefixes)
+					{
+						if (Filename.StartsWith(Prefix, ESearchCase::IgnoreCase))
+						{
+							bSkip = true;
+							break;
+						}
+					}
+					if (bSkip)
+					{
+						continue;
+					}
+				}
 
 				FString Relative = Line;
 				Relative.ReplaceInline(TEXT("ShooterGame\\Content\\"), TEXT("Game\\"));
@@ -2013,7 +2041,7 @@ namespace
 								}
 								if (!SlotMat)
 								{
-									const FString SlotName = StaticMats[SlotIdx].MaterialSlotName.ToString();
+									const FString SlotName = UBPFL::ResolveCleanMaterialVariation(StaticMats[SlotIdx].MaterialSlotName.ToString());
 									const FString MatPath = FString::Printf(TEXT("/Game/ValorantContent/Materials/%s.%s"), *SlotName, *SlotName);
 									SlotMat = Cast<UMaterialInterface>(StaticLoadObject(UMaterialInterface::StaticClass(), nullptr, *MatPath));
 								}

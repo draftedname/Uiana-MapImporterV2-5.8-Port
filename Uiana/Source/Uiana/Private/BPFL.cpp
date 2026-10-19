@@ -16,6 +16,7 @@
 #include "Engine/World.h"
 #include "Kismet2/KismetEditorUtilities.h"
 #include "Misc/FileHelper.h"
+#include "Misc/PackageName.h"
 #include "EditorAssetLibrary.h"
 #include "Factories/TextureFactory.h"
 #include "StaticMeshDescription.h"
@@ -372,6 +373,7 @@ void UBPFL::ImportMeshes(TArray<FString> AllMeshesPath, FString ObjectsPath)
 												{
 													RawMatName = TEXT("Stone_M2_Steps_MI");
 												}
+												RawMatName = ResolveCleanMaterialVariation(RawMatName);
 												if (!RawMatName.IsEmpty() && RawMatName != TEXT("WorldGridMaterial") && RawMatName != TEXT("DefaultMaterial"))
 												{
 													FString MatPath = FString::Printf(TEXT("/Game/ValorantContent/Materials/%s.%s"), *RawMatName, *RawMatName);
@@ -454,19 +456,88 @@ ECollisionTraceFlag UBPFL::GetTraceFlag(FString tflag)
 
 bool UBPFL::ImportValorantMap(FString MapName, FString PaksFolder, FString ExportFolder, bool bImportMeshes, bool bImportMaterials, bool bImportLights, bool bImportDecals)
 {
-	UUianaDataSettings* Settings = NewObject<UUianaDataSettings>();
-	Settings->ExportFolder.Path = ExportFolder;
-	Settings->PaksFolder.Path = PaksFolder;
+	UUianaDataSettings* Settings = GetMutableDefault<UUianaDataSettings>();
+	Settings->LoadConfig();
+	if (!ExportFolder.IsEmpty())
+	{
+		Settings->ExportFolder.Path = ExportFolder;
+	}
+	if (!PaksFolder.IsEmpty())
+	{
+		Settings->PaksFolder.Path = PaksFolder;
+	}
 	Settings->ImportMeshes = bImportMeshes;
 	Settings->ImportMaterials = bImportMaterials;
 	Settings->ImportLights = bImportLights;
 	Settings->ImportDecals = bImportDecals;
-	Settings->ImportBlueprints = false;
-	Settings->UseSubLevels = true;
-	Settings->LightmapResolutionMultiplier = 1.0f;
-
-	Settings->Map = MapName;
+	if (!MapName.IsEmpty())
+	{
+		Settings->Map = MapName;
+	}
 
 	return FUianaImporter::Run(*Settings);
 }
+
+FString UBPFL::ResolveCleanMaterialVariation(const FString& InMatName)
+{
+	if (InMatName.IsEmpty())
+	{
+		return InMatName;
+	}
+
+	if (InMatName == TEXT("Stone_M2_Steps_MI1"))
+	{
+		return TEXT("Stone_M2_Steps_MI");
+	}
+
+	if (InMatName.StartsWith(TEXT("Grass_"), ESearchCase::IgnoreCase) ||
+		InMatName.StartsWith(TEXT("Dirt_"), ESearchCase::IgnoreCase) ||
+		InMatName.StartsWith(TEXT("Sand_"), ESearchCase::IgnoreCase))
+	{
+		return InMatName;
+	}
+
+	const bool bHasGrass = InMatName.Contains(TEXT("Grass"));
+	const bool bHasDirt = InMatName.Contains(TEXT("Dirt")) && !InMatName.Contains(TEXT("Dirty"));
+	const bool bHasSand = InMatName.Contains(TEXT("Sand"));
+
+	if (!bHasGrass && !bHasDirt && !bHasSand)
+	{
+		return InMatName;
+	}
+
+	TArray<FString> VariationWords;
+	if (bHasGrass) { VariationWords.Add(TEXT("_Grass")); VariationWords.Add(TEXT("Grass_")); VariationWords.Add(TEXT("Grass")); }
+	if (bHasDirt)  { VariationWords.Add(TEXT("_Dirt"));  VariationWords.Add(TEXT("Dirt_"));  VariationWords.Add(TEXT("Dirt")); }
+	if (bHasSand)  { VariationWords.Add(TEXT("_Sand"));  VariationWords.Add(TEXT("Sand_"));  VariationWords.Add(TEXT("Sand")); }
+
+	for (const FString& Word : VariationWords)
+	{
+		if (InMatName.Contains(Word))
+		{
+			FString Candidate = InMatName.Replace(*Word, TEXT(""));
+			if (Candidate.IsEmpty() || Candidate == InMatName)
+			{
+				continue;
+			}
+
+			const FString GamePath = FString::Printf(TEXT("/Game/ValorantContent/Materials/%s.%s"), *Candidate, *Candidate);
+			if (FPackageName::DoesPackageExist(FString::Printf(TEXT("/Game/ValorantContent/Materials/%s"), *Candidate)) ||
+				StaticLoadObject(UMaterialInterface::StaticClass(), nullptr, *GamePath) != nullptr)
+			{
+				return Candidate;
+			}
+
+			const FString PluginPath = FString::Printf(TEXT("/Uiana/Materials/%s.%s"), *Candidate, *Candidate);
+			if (FPackageName::DoesPackageExist(FString::Printf(TEXT("/Uiana/Materials/%s"), *Candidate)) ||
+				StaticLoadObject(UMaterialInterface::StaticClass(), nullptr, *PluginPath) != nullptr)
+			{
+				return Candidate;
+			}
+		}
+	}
+
+	return InMatName;
+}
+
 

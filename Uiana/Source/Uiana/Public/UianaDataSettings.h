@@ -3,7 +3,7 @@
 #include "Engine/EngineTypes.h"
 #include "UianaDataSettings.generated.h"
 
-UCLASS(config = Engine, defaultconfig, transient)
+UCLASS(config = EditorPerProjectUserSettings, defaultconfig)
 class UIANA_API UUianaDataSettings : public UObject
 {
 	GENERATED_BODY()

@@ -111,8 +111,9 @@ void FUianaModule::RegisterMenus()
 
 TSharedRef<SWidget> FUianaModule::MakeDataManagementSettingsDetailsWidget() const
 {
-	UObject* Container = NewObject<UUianaDataSettings>();
-	Stun = Cast<UUianaDataSettings>(Container);
+	UUianaDataSettings* Settings = GetMutableDefault<UUianaDataSettings>();
+	Settings->LoadConfig();
+	Stun = Settings;
 	FPropertyEditorModule& PropertyEditorModule = FModuleManager::Get().LoadModuleChecked<FPropertyEditorModule>("PropertyEditor");
 	FDetailsViewArgs DetailsViewArgs;
 	DetailsViewArgs.bUpdatesFromSelection = false;
@@ -123,8 +124,14 @@ TSharedRef<SWidget> FUianaModule::MakeDataManagementSettingsDetailsWidget() cons
 	DetailsViewArgs.bShowScrollBar = false;
 	TSharedRef<IDetailsView> Details = PropertyEditorModule.CreateDetailView(DetailsViewArgs);
 	PropertyEditorModule.CreatePropertyTable();
-	Details->SetObject(Container);
+	Details->SetObject(Settings);
 	Details->SetEnabled(true);
+	Details->OnFinishedChangingProperties().AddLambda([](const FPropertyChangedEvent& Event) {
+		if (UUianaDataSettings* SettingsObj = GetMutableDefault<UUianaDataSettings>())
+		{
+			SettingsObj->SaveConfig();
+		}
+	});
 
 	return Details;
 }

@@ -20,7 +20,16 @@ UUianaDataSettings::UUianaDataSettings(const FObjectInitializer& ObjectInitializ
 	MeshFilterPrefixes = {
 		TEXT("Floater_"),
 		TEXT("Wires_"),
-		TEXT("Cloth_")
+		TEXT("Cloth_"),
+		TEXT("BWall_"),
+		TEXT("Plant_0_GroundLeavesC_"),
+		TEXT("Plant_0_GroundLeavesB_"),
+		TEXT("Plant_0_GroundLeavesA_"),
+		TEXT("Papers_"),
+		TEXT("Gravel_"),
+		TEXT("Rock_"),
+		TEXT("Brick_"),
+		TEXT("Shell_4_Asylum")
 	};
 	ImportMaterials = true;
 	ImportDecals = false;
