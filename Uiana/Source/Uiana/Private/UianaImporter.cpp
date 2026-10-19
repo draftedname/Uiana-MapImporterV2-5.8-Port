@@ -24,6 +24,7 @@
 #include "Engine/StaticMesh.h"
 #include "Engine/StaticMeshActor.h"
 #include "Engine/PostProcessVolume.h"
+#include "Engine/Engine.h"
 #include "EngineUtils.h"
 #include "Engine/Blueprint.h"
 #include "Editor.h"
@@ -760,6 +761,7 @@ namespace
 		ListFiles(FolderPath, TEXT("json"), Files);
 
 		IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>(TEXT("AssetTools")).Get();
+		int32 ProcessedCount = 0;
 
 		for (const FString& FilePath : Files)
 		{
@@ -802,7 +804,7 @@ namespace
 			if ((*Props)->TryGetObjectField(TEXT("Parent"), ParentObj) && ParentObj && (*ParentObj).IsValid())
 			{
 				ParentName = GetRefName(*ParentObj);
-				if (ParentName.IsEmpty())
+				if (ParentName.IsEmpty() || ParentName == TEXT("BaseOpacity_RGB_Env_MAT") || ParentName == TEXT("BaseOpacitySpecEnv_MAT"))
 				{
 					ParentName = TEXT("BaseEnv_MAT_V4");
 				}
@@ -1034,6 +1036,15 @@ namespace
 			FSavePackageArgs SaveArgs;
 			const FString Filename = FPackageName::LongPackageNameToFilename(Package->GetName(), FPackageName::GetAssetPackageExtension());
 			UPackage::SavePackage(Package, MIC, *Filename, SaveArgs);
+
+			if (++ProcessedCount % 40 == 0)
+			{
+				if (GEngine)
+				{
+					GEngine->TrimMemory();
+				}
+				CollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS);
+			}
 		}
 	}
 

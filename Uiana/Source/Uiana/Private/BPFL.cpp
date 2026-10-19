@@ -22,6 +22,7 @@
 #include "StaticMeshDescription.h"
 #include "Misc/ScopedSlowTask.h"
 #include "Engine/RendererSettings.h"
+#include "Engine/Engine.h"
 #include "Readers/UEFModelReader.h"
 #include "Factories/UEFModelFactory.h"
 #include "StaticMeshComponentLODInfo.h"
@@ -267,6 +268,15 @@ void UBPFL::ImportTextures(TArray<FString> AllTexturesPath)
 		FAssetRegistryModule::AssetCreated(Tex);
 		FSavePackageArgs SaveArgs;
 		UPackage::SavePackage(TexPackage, Tex, *PackageFileName, SaveArgs);
+
+		if ((ActorIdx + 1) % 40 == 0)
+		{
+			if (GEngine)
+			{
+				GEngine->TrimMemory();
+			}
+			CollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS);
+		}
 	}
 }
 
@@ -482,6 +492,15 @@ void UBPFL::ImportMeshes(TArray<FString> AllMeshesPath, FString ObjectsPath)
 
 		ImportTask.DefaultMessage = FText::FromString(FString::Printf(TEXT("Importing Mesh : %d of %d: %s"), ActorIdx + 1, AllMeshesPath.Num() + 1, *MeshName));
 		ImportTask.EnterProgressFrame();
+
+		if ((ActorIdx + 1) % 40 == 0)
+		{
+			if (GEngine)
+			{
+				GEngine->TrimMemory();
+			}
+			CollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS);
+		}
 	}
 }
 
