@@ -479,7 +479,8 @@ namespace
 
 			const FString Type = Obj->GetStringField(TEXT("Type"));
 			const FString TypeLower = Type.ToLower();
-			const bool bKeep = MeshTypes.Contains(TypeLower) || GenericTypes.Contains(TypeLower) || TypeLower == TEXT("decalcomponent") || TypeLower.EndsWith(TEXT("_c"));
+			const bool bImportDecals = (!Config || Config->bImportDecals);
+			const bool bKeep = MeshTypes.Contains(TypeLower) || GenericTypes.Contains(TypeLower) || (bImportDecals && TypeLower == TEXT("decalcomponent")) || TypeLower.EndsWith(TEXT("_c"));
 			if (!bKeep)
 			{
 				continue;
@@ -553,10 +554,13 @@ namespace
 				}
 			}
 
-			const TSharedPtr<FJsonObject>* DecalMaterial = nullptr;
-			if ((*Props)->TryGetObjectField(TEXT("DecalMaterial"), DecalMaterial) && DecalMaterial && (*DecalMaterial).IsValid())
+			if (bImportDecals)
 			{
-				OutOverrideMaterials.Add(ToBackslashObjectPath((*DecalMaterial)->GetStringField(TEXT("ObjectPath"))));
+				const TSharedPtr<FJsonObject>* DecalMaterial = nullptr;
+				if ((*Props)->TryGetObjectField(TEXT("DecalMaterial"), DecalMaterial) && DecalMaterial && (*DecalMaterial).IsValid())
+				{
+					OutOverrideMaterials.Add(ToBackslashObjectPath((*DecalMaterial)->GetStringField(TEXT("ObjectPath"))));
+				}
 			}
 		}
 	}
@@ -814,14 +818,17 @@ namespace
 				PhysMatName = GetRefName(*PhysMatObj);
 			}
 
+			const bool bForceOpaque = MaterialName.StartsWith(TEXT("Windows"), ESearchCase::IgnoreCase) ||
+				MaterialName.StartsWith(TEXT("Window"), ESearchCase::IgnoreCase) ||
+				MaterialName.Contains(TEXT("GlassShard"), ESearchCase::IgnoreCase) ||
+				MaterialName.Contains(TEXT("LightFixtureGlass"), ESearchCase::IgnoreCase) ||
+				MaterialName.Contains(TEXT("Shard_0_Box"), ESearchCase::IgnoreCase);
+
 			// Glass check: physical material or naming pattern
-			const bool bIsGlass = PhysMatName.Equals(TEXT("M_Glass"), ESearchCase::IgnoreCase) ||
+			const bool bIsGlass = !bForceOpaque && (PhysMatName.Equals(TEXT("M_Glass"), ESearchCase::IgnoreCase) ||
 				MaterialName.Contains(TEXT("Glass_")) ||
 				MaterialName.Contains(TEXT("GlassWarped")) ||
-				MaterialName.Contains(TEXT("GlassShard")) ||
-				MaterialName.Contains(TEXT("Panes")) ||
-				MaterialName.Contains(TEXT("LightFixtureGlass")) ||
-				MaterialName.StartsWith(TEXT("Windows_"));
+				MaterialName.Contains(TEXT("Panes")));
 
 			// Foliage check: package path or foliage naming pattern (excluding bark, trunk, planter)
 			const FString PackagePath = RootObj->GetStringField(TEXT("Package"));
@@ -845,7 +852,11 @@ namespace
 				!MaterialName.Contains(TEXT("Bark")) &&
 				!MaterialName.Contains(TEXT("Planter"));
 
-			if (bIsGlass || ParentName == TEXT("BaseOpacitySpecEnv_MAT"))
+			if (MaterialName.StartsWith(TEXT("Vista_"), ESearchCase::IgnoreCase))
+			{
+				ParentName = TEXT("BaseEnv_Unlit_Texture_MAT_V4");
+			}
+			else if (bIsGlass || (!bForceOpaque && ParentName == TEXT("BaseOpacitySpecEnv_MAT")))
 			{
 				ParentName = TEXT("BaseOpacity_RGB_Env_MAT");
 			}
@@ -868,7 +879,7 @@ namespace
 					ParentMat = Cast<UMaterialInterface>(StaticLoadObject(UMaterialInterface::StaticClass(), nullptr, TEXT("/Uiana/Materials/BaseEnv_Unlit_Texture_MAT_V4.BaseEnv_Unlit_Texture_MAT_V4")));
 				}
 			}
-			if (!ParentMat && (ParentName == TEXT("BaseEnv_MAT_V4_Foliage") || ParentName == TEXT("BaseOpacity_RGB_Env_MAT") || ParentName == TEXT("0_Waterfall_Base")))
+			if (!ParentMat && (ParentName == TEXT("BaseEnv_MAT_V4_Foliage") || ParentName == TEXT("BaseOpacity_RGB_Env_MAT") || ParentName == TEXT("0_Waterfall_Base") || ParentName == TEXT("BaseEnv_Unlit_Texture_MAT_V4")))
 			{
 				const FString PluginMatPath = FString::Printf(TEXT("/Uiana/Materials/%s.%s"), *ParentName, *ParentName);
 				ParentMat = Cast<UMaterialInterface>(StaticLoadObject(UMaterialInterface::StaticClass(), nullptr, *PluginMatPath));
@@ -1050,6 +1061,19 @@ namespace
 			return;
 		}
 
+		if (!Config.bImportDecals)
+		{
+			TArray<AActor*> ExistingDecals;
+			UGameplayStatics::GetAllActorsOfClass(World, ADecalActor::StaticClass(), ExistingDecals);
+			for (AActor* DecalActor : ExistingDecals)
+			{
+				if (DecalActor)
+				{
+					World->EditorDestroyActor(DecalActor, true);
+				}
+			}
+		}
+
 		TArray<TSharedPtr<FJsonValue>> JsonArray;
 		if (!ReadJsonArray(UMapJsonPath, JsonArray))
 		{
@@ -1185,7 +1209,8 @@ namespace
 
 				const bool bIsSuperGrid = IsSuperGridMesh(MeshName);
 				const bool bIsBpCollision = OuterName.StartsWith(TEXT("BP_"), ESearchCase::IgnoreCase) || MeshName.StartsWith(TEXT("BP_"), ESearchCase::IgnoreCase);
-				const bool bIsInvisible = bIsSuperGrid || bIsBpCollision;
+				const bool bIsBoxVolume = OuterName.StartsWith(TEXT("Box_6_"), ESearchCase::IgnoreCase) || MeshName.StartsWith(TEXT("Box_6_"), ESearchCase::IgnoreCase);
+				const bool bIsInvisible = bIsSuperGrid || bIsBpCollision || bIsBoxVolume;
 				if (Type.Contains(TEXT("Instanced")))
 				{
 					AHismActor* Actor = World->SpawnActor<AHismActor>(AHismActor::StaticClass(), Transform);
@@ -1196,7 +1221,7 @@ namespace
 					Actor->SetActorLabel(OuterName);
 					if (bIsInvisible)
 					{
-						Actor->SetFolderPath(bIsBpCollision ? TEXT("Collision/Blueprints") : TEXT("Collision/SuperGrid"));
+						Actor->SetFolderPath(bIsBpCollision ? TEXT("Collision/Blueprints") : (bIsBoxVolume ? TEXT("Collision/Boxes") : TEXT("Collision/SuperGrid")));
 						Actor->SetActorHiddenInGame(true);
 						Actor->SetIsTemporarilyHiddenInEditor(true);
 						Actor->HismComponent->SetVisibility(false, true);
@@ -1281,11 +1306,14 @@ namespace
 						const TArray<FStaticMaterial>& StaticMats = LoadedMesh->GetStaticMaterials();
 						for (int32 SlotIdx = 0; SlotIdx < StaticMats.Num(); ++SlotIdx)
 						{
-							if (!Actor->HismComponent->GetMaterial(SlotIdx))
+							UMaterialInterface* CurMat = Actor->HismComponent->GetMaterial(SlotIdx);
+							const bool bIsPlaceholder = !CurMat || CurMat->GetName() == TEXT("WorldGridMaterial") || CurMat->GetName() == TEXT("DefaultMaterial");
+							if (bIsPlaceholder)
 							{
-								if (LoadedMesh->GetMaterial(SlotIdx))
+								UMaterialInterface* MeshMat = LoadedMesh->GetMaterial(SlotIdx);
+								if (MeshMat && MeshMat->GetName() != TEXT("WorldGridMaterial") && MeshMat->GetName() != TEXT("DefaultMaterial"))
 								{
-									Actor->HismComponent->SetMaterial(SlotIdx, LoadedMesh->GetMaterial(SlotIdx));
+									Actor->HismComponent->SetMaterial(SlotIdx, MeshMat);
 								}
 								else
 								{
@@ -1294,7 +1322,6 @@ namespace
 									if (UMaterialInterface* FallbackMat = Cast<UMaterialInterface>(StaticLoadObject(UMaterialInterface::StaticClass(), nullptr, *MatPath)))
 									{
 										Actor->HismComponent->SetMaterial(SlotIdx, FallbackMat);
-										LoadedMesh->SetMaterial(SlotIdx, FallbackMat);
 									}
 								}
 							}
@@ -1312,7 +1339,7 @@ namespace
 					UStaticMeshComponent* SMC = Actor->GetStaticMeshComponent();
 					if (bIsInvisible)
 					{
-						Actor->SetFolderPath(bIsBpCollision ? TEXT("Collision/Blueprints") : TEXT("Collision/SuperGrid"));
+						Actor->SetFolderPath(bIsBpCollision ? TEXT("Collision/Blueprints") : (bIsBoxVolume ? TEXT("Collision/Boxes") : TEXT("Collision/SuperGrid")));
 						Actor->SetActorHiddenInGame(true);
 						Actor->SetIsTemporarilyHiddenInEditor(true);
 						SMC->SetVisibility(false, true);
@@ -1356,11 +1383,14 @@ namespace
 						const TArray<FStaticMaterial>& StaticMats = LoadedMesh->GetStaticMaterials();
 						for (int32 SlotIdx = 0; SlotIdx < StaticMats.Num(); ++SlotIdx)
 						{
-							if (!SMC->GetMaterial(SlotIdx))
+							UMaterialInterface* CurMat = SMC->GetMaterial(SlotIdx);
+							const bool bIsPlaceholder = !CurMat || CurMat->GetName() == TEXT("WorldGridMaterial") || CurMat->GetName() == TEXT("DefaultMaterial");
+							if (bIsPlaceholder)
 							{
-								if (LoadedMesh->GetMaterial(SlotIdx))
+								UMaterialInterface* MeshMat = LoadedMesh->GetMaterial(SlotIdx);
+								if (MeshMat && MeshMat->GetName() != TEXT("WorldGridMaterial") && MeshMat->GetName() != TEXT("DefaultMaterial"))
 								{
-									SMC->SetMaterial(SlotIdx, LoadedMesh->GetMaterial(SlotIdx));
+									SMC->SetMaterial(SlotIdx, MeshMat);
 								}
 								else
 								{
@@ -1369,7 +1399,6 @@ namespace
 									if (UMaterialInterface* FallbackMat = Cast<UMaterialInterface>(StaticLoadObject(UMaterialInterface::StaticClass(), nullptr, *MatPath)))
 									{
 										SMC->SetMaterial(SlotIdx, FallbackMat);
-										LoadedMesh->SetMaterial(SlotIdx, FallbackMat);
 									}
 								}
 							}
@@ -1939,20 +1968,56 @@ namespace
 					if (UStaticMesh* SM = Cast<UStaticMesh>(StaticLoadObject(UStaticMesh::StaticClass(), nullptr, *MeshAssetPath)))
 					{
 						bool bMeshModified = false;
+						const FString JsonFile = FPaths::Combine(Paths.Objects, MeshBaseName + TEXT(".json"));
+						TArray<TSharedPtr<FJsonValue>> MeshJson;
+						TSharedPtr<FJsonObject> MeshProps;
+						if (FPaths::FileExists(JsonFile) && ReadJsonArray(JsonFile, MeshJson) && MeshJson.Num() > 0)
+						{
+							for (const auto& Val : MeshJson)
+							{
+								TSharedPtr<FJsonObject> Obj = Val->AsObject();
+								if (Obj.IsValid() && Obj->GetStringField(TEXT("Type")) == TEXT("StaticMesh"))
+								{
+									const TSharedPtr<FJsonObject>* P = nullptr;
+									if (Obj->TryGetObjectField(TEXT("Properties"), P) && P && (*P).IsValid())
+									{
+										MeshProps = *P;
+										break;
+									}
+								}
+							}
+						}
+
+						const TArray<TSharedPtr<FJsonValue>>* JsonStaticMats = nullptr;
+						if (MeshProps.IsValid())
+						{
+							MeshProps->TryGetArrayField(TEXT("StaticMaterials"), JsonStaticMats);
+						}
+
 						const TArray<FStaticMaterial>& StaticMats = SM->GetStaticMaterials();
 						for (int32 SlotIdx = 0; SlotIdx < StaticMats.Num(); ++SlotIdx)
 						{
-							if (!SM->GetMaterial(SlotIdx))
+							UMaterialInterface* CurSlotMat = SM->GetMaterial(SlotIdx);
+							const bool bIsPlaceholder = !CurSlotMat || CurSlotMat->GetName() == TEXT("WorldGridMaterial") || CurSlotMat->GetName() == TEXT("DefaultMaterial");
+							if (bIsPlaceholder)
 							{
-								const FString SlotName = StaticMats[SlotIdx].MaterialSlotName.ToString();
-								const FString MatPath = FString::Printf(TEXT("/Game/ValorantContent/Materials/%s.%s"), *SlotName, *SlotName);
-								UMaterialInterface* SlotMat = Cast<UMaterialInterface>(StaticLoadObject(UMaterialInterface::StaticClass(), nullptr, *MatPath));
+								UMaterialInterface* SlotMat = nullptr;
+								if (JsonStaticMats && JsonStaticMats->IsValidIndex(SlotIdx))
+								{
+									TSharedPtr<FJsonObject> MatObj = (*JsonStaticMats)[SlotIdx]->AsObject();
+									const TSharedPtr<FJsonObject>* MatInterface = nullptr;
+									if (MatObj.IsValid() && MatObj->TryGetObjectField(TEXT("MaterialInterface"), MatInterface) && MatInterface && (*MatInterface).IsValid())
+									{
+										SlotMat = LoadMaterialFromRef(*MatInterface);
+									}
+								}
 								if (!SlotMat)
 								{
-									const FString PluginMatPath = FString::Printf(TEXT("/Uiana/Materials/%s.%s"), *SlotName, *SlotName);
-									SlotMat = Cast<UMaterialInterface>(StaticLoadObject(UMaterialInterface::StaticClass(), nullptr, *PluginMatPath));
+									const FString SlotName = StaticMats[SlotIdx].MaterialSlotName.ToString();
+									const FString MatPath = FString::Printf(TEXT("/Game/ValorantContent/Materials/%s.%s"), *SlotName, *SlotName);
+									SlotMat = Cast<UMaterialInterface>(StaticLoadObject(UMaterialInterface::StaticClass(), nullptr, *MatPath));
 								}
-								if (SlotMat)
+								if (SlotMat && SlotMat->GetName() != TEXT("WorldGridMaterial") && SlotMat->GetName() != TEXT("DefaultMaterial"))
 								{
 									SM->SetMaterial(SlotIdx, SlotMat);
 									bMeshModified = true;

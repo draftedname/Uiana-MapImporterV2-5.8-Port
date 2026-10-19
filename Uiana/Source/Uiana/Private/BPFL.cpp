@@ -346,6 +346,50 @@ void UBPFL::ImportMeshes(TArray<FString> AllMeshesPath, FString ObjectsPath)
 											bNeedsSave = true;
 										}
 									}
+
+									const TArray<TSharedPtr<FJsonValue>>* StaticMaterials = nullptr;
+									if ((*Props)->TryGetArrayField(TEXT("StaticMaterials"), StaticMaterials) && StaticMaterials)
+									{
+										const int32 NumMats = StaticMesh->GetStaticMaterials().Num();
+										for (int32 SlotIdx = 0; SlotIdx < StaticMaterials->Num() && SlotIdx < NumMats; ++SlotIdx)
+										{
+											const TSharedPtr<FJsonObject> MatObj = (*StaticMaterials)[SlotIdx]->AsObject();
+											if (!MatObj.IsValid()) continue;
+											const TSharedPtr<FJsonObject>* MatInterface = nullptr;
+											if (MatObj->TryGetObjectField(TEXT("MaterialInterface"), MatInterface) && MatInterface && (*MatInterface).IsValid())
+											{
+												FString RawMatName = (*MatInterface)->GetStringField(TEXT("ObjectName"));
+												int32 SingleQuote = INDEX_NONE;
+												if (RawMatName.FindChar(TEXT('\''), SingleQuote))
+												{
+													RawMatName = RawMatName.Mid(SingleQuote + 1);
+													if (RawMatName.FindLastChar(TEXT('\''), SingleQuote))
+													{
+														RawMatName = RawMatName.Left(SingleQuote);
+													}
+												}
+												if (RawMatName == TEXT("Stone_M2_Steps_MI1"))
+												{
+													RawMatName = TEXT("Stone_M2_Steps_MI");
+												}
+												if (!RawMatName.IsEmpty() && RawMatName != TEXT("WorldGridMaterial") && RawMatName != TEXT("DefaultMaterial"))
+												{
+													FString MatPath = FString::Printf(TEXT("/Game/ValorantContent/Materials/%s.%s"), *RawMatName, *RawMatName);
+													UMaterialInterface* Mat = Cast<UMaterialInterface>(StaticLoadObject(UMaterialInterface::StaticClass(), nullptr, *MatPath));
+													if (!Mat)
+													{
+														MatPath = FString::Printf(TEXT("/Uiana/Materials/%s.%s"), *RawMatName, *RawMatName);
+														Mat = Cast<UMaterialInterface>(StaticLoadObject(UMaterialInterface::StaticClass(), nullptr, *MatPath));
+													}
+													if (Mat && StaticMesh->GetMaterial(SlotIdx) != Mat)
+													{
+														StaticMesh->SetMaterial(SlotIdx, Mat);
+														bNeedsSave = true;
+													}
+												}
+											}
+										}
+									}
 								}
 							}
 						}

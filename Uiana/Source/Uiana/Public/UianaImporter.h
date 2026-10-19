@@ -13,7 +13,7 @@ struct FUianaImportConfig
 	FString PaksRoot;
 	FString MapName;
 
-	bool bImportDecals = true;
+	bool bImportDecals = false;
 	bool bSkipBarrierDecals = true;
 	TArray<FString> DecalFilterPrefixes = {
 		TEXT("DomeSpawnMarker_"),
@@ -27,7 +27,8 @@ struct FUianaImportConfig
 	bool bFilterMeshes = true;
 	TArray<FString> MeshFilterPrefixes = {
 		TEXT("Floater_"),
-		TEXT("Wires_")
+		TEXT("Wires_"),
+		TEXT("Cloth_")
 	};
 	bool bImportMaterials = true;
 	bool bImportSublevels = true;

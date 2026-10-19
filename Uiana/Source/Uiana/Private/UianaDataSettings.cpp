@@ -19,10 +19,11 @@ UUianaDataSettings::UUianaDataSettings(const FObjectInitializer& ObjectInitializ
 	bFilterMeshes = true;
 	MeshFilterPrefixes = {
 		TEXT("Floater_"),
-		TEXT("Wires_")
+		TEXT("Wires_"),
+		TEXT("Cloth_")
 	};
 	ImportMaterials = true;
-	ImportDecals = true;
+	ImportDecals = false;
 	bSkipBarrierDecals = true;
 	DecalFilterPrefixes = {
 		TEXT("DomeSpawnMarker_"),
