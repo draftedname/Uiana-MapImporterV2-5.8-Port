@@ -454,7 +454,8 @@ namespace
 		TArray<TSharedPtr<FJsonValue>>& OutFiltered,
 		TArray<FString>& OutObjects,
 		TArray<FString>& OutOverrideMaterials,
-		TArray<FString>& OutActors)
+		TArray<FString>& OutActors,
+		const FUianaImportConfig* Config = nullptr)
 	{
 		static const TSet<FString> MeshTypes = {
 			TEXT("staticmesh"), TEXT("staticmeshcomponent"), TEXT("instancedstaticmeshcomponent"), TEXT("hierarchicalinstancedstaticmeshcomponent")
@@ -484,10 +485,43 @@ namespace
 				continue;
 			}
 
-			OutFiltered.Add(Value);
-
 			const TSharedPtr<FJsonObject>* Props = nullptr;
 			const bool bHasProps = Obj->TryGetObjectField(TEXT("Properties"), Props) && Props && (*Props).IsValid();
+
+			if (Config && Config->bFilterMeshes && MeshTypes.Contains(TypeLower) && bHasProps)
+			{
+				const TSharedPtr<FJsonObject>* StaticMesh = nullptr;
+				if ((*Props)->TryGetObjectField(TEXT("StaticMesh"), StaticMesh) && StaticMesh && (*StaticMesh).IsValid())
+				{
+					const FString MeshName = GetRefName(*StaticMesh);
+					FString OuterName;
+					const TSharedPtr<FJsonObject>* OuterObj = nullptr;
+					if (Obj->TryGetObjectField(TEXT("Outer"), OuterObj) && OuterObj && (*OuterObj).IsValid())
+					{
+						OuterName = GetRefName(*OuterObj);
+					}
+					else
+					{
+						OuterName = ExtractCleanObjectName(Obj->GetStringField(TEXT("Outer")));
+					}
+
+					bool bSkipMesh = false;
+					for (const FString& Prefix : Config->MeshFilterPrefixes)
+					{
+						if (MeshName.StartsWith(Prefix, ESearchCase::IgnoreCase) || OuterName.StartsWith(Prefix, ESearchCase::IgnoreCase))
+						{
+							bSkipMesh = true;
+							break;
+						}
+					}
+					if (bSkipMesh)
+					{
+						continue;
+					}
+				}
+			}
+
+			OutFiltered.Add(Value);
 
 			if (Type.EndsWith(TEXT("_C")) && Obj->HasField(TEXT("Template")))
 			{
@@ -773,6 +807,57 @@ namespace
 				ParentName = TEXT("BaseEnv_Unlit_Texture_MAT_V4");
 			}
 
+			FString PhysMatName;
+			const TSharedPtr<FJsonObject>* PhysMatObj = nullptr;
+			if ((*Props)->TryGetObjectField(TEXT("PhysMaterial"), PhysMatObj) && PhysMatObj && (*PhysMatObj).IsValid())
+			{
+				PhysMatName = GetRefName(*PhysMatObj);
+			}
+
+			// Glass check: physical material or naming pattern
+			const bool bIsGlass = PhysMatName.Equals(TEXT("M_Glass"), ESearchCase::IgnoreCase) ||
+				MaterialName.Contains(TEXT("Glass_")) ||
+				MaterialName.Contains(TEXT("GlassWarped")) ||
+				MaterialName.Contains(TEXT("GlassShard")) ||
+				MaterialName.Contains(TEXT("Panes")) ||
+				MaterialName.Contains(TEXT("LightFixtureGlass")) ||
+				MaterialName.StartsWith(TEXT("Windows_"));
+
+			// Foliage check: package path or foliage naming pattern (excluding bark, trunk, planter)
+			const FString PackagePath = RootObj->GetStringField(TEXT("Package"));
+			const bool bIsFoliage = (PackagePath.Contains(TEXT("/Foliage/")) ||
+				MaterialName.StartsWith(TEXT("Foliage_")) ||
+				MaterialName.Contains(TEXT("VegetationLeaves")) ||
+				MaterialName.Contains(TEXT("BeechGreenFoliage")) ||
+				MaterialName.Contains(TEXT("Arborvitae")) ||
+				MaterialName.Contains(TEXT("Conifer")) ||
+				MaterialName.Contains(TEXT("Ivy_")) ||
+				MaterialName.Contains(TEXT("Flowers")) ||
+				MaterialName.Contains(TEXT("PlantAlpha")) ||
+				MaterialName.Contains(TEXT("Grass_M0_Cards")) ||
+				MaterialName.Contains(TEXT("PlantPotted_0_M0_A")) ||
+				MaterialName.Contains(TEXT("PlantPotted_0_M1_B")) ||
+				MaterialName.Contains(TEXT("PlantPotted_0_M4_Hanging")) ||
+				MaterialName.Contains(TEXT("PlantPotted_0_M5_Hanging")) ||
+				MaterialName.Contains(TEXT("Plant_0_M0_corner")) ||
+				MaterialName.Contains(TEXT("Plant_0_M0_Dead"))) &&
+				!MaterialName.Contains(TEXT("Trunk")) &&
+				!MaterialName.Contains(TEXT("Bark")) &&
+				!MaterialName.Contains(TEXT("Planter"));
+
+			if (bIsGlass || ParentName == TEXT("BaseOpacitySpecEnv_MAT"))
+			{
+				ParentName = TEXT("BaseOpacity_RGB_Env_MAT");
+			}
+			else if (bIsFoliage)
+			{
+				ParentName = TEXT("BaseEnv_MAT_V4_Foliage");
+			}
+			else if (ParentName == TEXT("0_Waterfall_Base1") || ParentName == TEXT("0_Waterfall_Vista1"))
+			{
+				ParentName = TEXT("0_Waterfall_Base");
+			}
+
 			UMaterialInterface* ParentMat = nullptr;
 			if (MaterialName.StartsWith(TEXT("M_Sky_")))
 			{
@@ -782,6 +867,11 @@ namespace
 				{
 					ParentMat = Cast<UMaterialInterface>(StaticLoadObject(UMaterialInterface::StaticClass(), nullptr, TEXT("/Uiana/Materials/BaseEnv_Unlit_Texture_MAT_V4.BaseEnv_Unlit_Texture_MAT_V4")));
 				}
+			}
+			if (!ParentMat && (ParentName == TEXT("BaseEnv_MAT_V4_Foliage") || ParentName == TEXT("BaseOpacity_RGB_Env_MAT") || ParentName == TEXT("0_Waterfall_Base")))
+			{
+				const FString PluginMatPath = FString::Printf(TEXT("/Uiana/Materials/%s.%s"), *ParentName, *ParentName);
+				ParentMat = Cast<UMaterialInterface>(StaticLoadObject(UMaterialInterface::StaticClass(), nullptr, *PluginMatPath));
 			}
 			if (!ParentMat && !ParentName.IsEmpty() && ParentName != TEXT("BaseEnv_MAT_V4"))
 			{
@@ -838,13 +928,22 @@ namespace
 					{
 						continue;
 					}
-					const FName ParamName((*ParamInfo)->GetStringField(TEXT("Name")).ToLower());
+					const FString RawParamName = (*ParamInfo)->GetStringField(TEXT("Name")).ToLower();
+					const FName ParamName(*RawParamName);
 					const FLinearColor Color(
 						(*ParamValue)->GetNumberField(TEXT("R")),
 						(*ParamValue)->GetNumberField(TEXT("G")),
 						(*ParamValue)->GetNumberField(TEXT("B")),
 						(*ParamValue)->GetNumberField(TEXT("A")));
 					UMaterialEditingLibrary::SetMaterialInstanceVectorParameterValue(MIC, ParamName, Color);
+
+					if (ParentName == TEXT("BaseOpacity_RGB_Env_MAT"))
+					{
+						if (RawParamName == TEXT("diffusecolor") || RawParamName == TEXT("tint") || RawParamName == TEXT("color mult"))
+						{
+							UMaterialEditingLibrary::SetMaterialInstanceVectorParameterValue(MIC, FName(TEXT("color mult")), Color);
+						}
+					}
 				}
 			}
 
@@ -885,6 +984,44 @@ namespace
 						else if (RawParamName == TEXT("mra a") || RawParamName == TEXT("mra_texture"))
 						{
 							UMaterialEditingLibrary::SetMaterialInstanceTextureParameterValue(MIC, FName(TEXT("mra")), Texture);
+						}
+
+						if (ParentName == TEXT("BaseOpacity_RGB_Env_MAT"))
+						{
+							if (RawParamName == TEXT("diffuse") || RawParamName == TEXT("materialtexture") || RawParamName == TEXT("diffusetex") || RawParamName == TEXT("albedo"))
+							{
+								UMaterialEditingLibrary::SetMaterialInstanceTextureParameterValue(MIC, FName(TEXT("RGBA")), Texture);
+							}
+						}
+					}
+				}
+			}
+
+			const TSharedPtr<FJsonObject>* StaticParamsRuntime = nullptr;
+			if ((*Props)->TryGetObjectField(TEXT("StaticParametersRuntime"), StaticParamsRuntime) && StaticParamsRuntime && (*StaticParamsRuntime).IsValid())
+			{
+				const TArray<TSharedPtr<FJsonValue>>* SwitchParams = nullptr;
+				if ((*StaticParamsRuntime)->TryGetArrayField(TEXT("StaticSwitchParameters"), SwitchParams) && SwitchParams)
+				{
+					for (const TSharedPtr<FJsonValue>& Entry : *SwitchParams)
+					{
+						const TSharedPtr<FJsonObject> SwitchObj = Entry->AsObject();
+						if (!SwitchObj.IsValid())
+						{
+							continue;
+						}
+
+						const TSharedPtr<FJsonObject>* ParamInfo = nullptr;
+						if (!SwitchObj->TryGetObjectField(TEXT("ParameterInfo"), ParamInfo) || !(*ParamInfo).IsValid())
+						{
+							continue;
+						}
+
+						bool bValue = false;
+						if (SwitchObj->TryGetBoolField(TEXT("Value"), bValue))
+						{
+							const FName SwitchParamName(*((*ParamInfo)->GetStringField(TEXT("Name"))));
+							UMaterialEditingLibrary::SetMaterialInstanceStaticSwitchParameterValue(MIC, SwitchParamName, bValue, EMaterialParameterAssociation::GlobalParameter, false);
 						}
 					}
 				}
@@ -1021,6 +1158,24 @@ namespace
 				}
 
 				const FString MeshName = GetRefName(*StaticMesh);
+
+				if (Config.bFilterMeshes)
+				{
+					bool bSkipMesh = false;
+					for (const FString& Prefix : Config.MeshFilterPrefixes)
+					{
+						if (MeshName.StartsWith(Prefix, ESearchCase::IgnoreCase) || OuterName.StartsWith(Prefix, ESearchCase::IgnoreCase))
+						{
+							bSkipMesh = true;
+							break;
+						}
+					}
+					if (bSkipMesh)
+					{
+						continue;
+					}
+				}
+
 				const FString MeshAssetPath = FString::Printf(TEXT("/Game/ValorantContent/Meshes/%s.%s"), *MeshName, *MeshName);
 				UStaticMesh* LoadedMesh = Cast<UStaticMesh>(StaticLoadObject(UStaticMesh::StaticClass(), nullptr, *MeshAssetPath));
 				if (!LoadedMesh)
@@ -1029,6 +1184,8 @@ namespace
 				}
 
 				const bool bIsSuperGrid = IsSuperGridMesh(MeshName);
+				const bool bIsBpCollision = OuterName.StartsWith(TEXT("BP_"), ESearchCase::IgnoreCase) || MeshName.StartsWith(TEXT("BP_"), ESearchCase::IgnoreCase);
+				const bool bIsInvisible = bIsSuperGrid || bIsBpCollision;
 				if (Type.Contains(TEXT("Instanced")))
 				{
 					AHismActor* Actor = World->SpawnActor<AHismActor>(AHismActor::StaticClass(), Transform);
@@ -1037,9 +1194,9 @@ namespace
 						continue;
 					}
 					Actor->SetActorLabel(OuterName);
-					if (bIsSuperGrid)
+					if (bIsInvisible)
 					{
-						Actor->SetFolderPath(TEXT("Collision/SuperGrid"));
+						Actor->SetFolderPath(bIsBpCollision ? TEXT("Collision/Blueprints") : TEXT("Collision/SuperGrid"));
 						Actor->SetActorHiddenInGame(true);
 						Actor->SetIsTemporarilyHiddenInEditor(true);
 						Actor->HismComponent->SetVisibility(false, true);
@@ -1153,9 +1310,9 @@ namespace
 					}
 					Actor->SetActorLabel(OuterName);
 					UStaticMeshComponent* SMC = Actor->GetStaticMeshComponent();
-					if (bIsSuperGrid)
+					if (bIsInvisible)
 					{
-						Actor->SetFolderPath(TEXT("Collision/SuperGrid"));
+						Actor->SetFolderPath(bIsBpCollision ? TEXT("Collision/Blueprints") : TEXT("Collision/SuperGrid"));
 						Actor->SetActorHiddenInGame(true);
 						Actor->SetIsTemporarilyHiddenInEditor(true);
 						SMC->SetVisibility(false, true);
@@ -1576,6 +1733,16 @@ namespace
 				if (BPActor)
 				{
 					BPActor->SetActorLabel(Obj->GetStringField(TEXT("Name")));
+					if (BPName.StartsWith(TEXT("BP_"), ESearchCase::IgnoreCase))
+					{
+						BPActor->SetFolderPath(TEXT("Collision/Blueprints"));
+						BPActor->SetActorHiddenInGame(true);
+						BPActor->SetIsTemporarilyHiddenInEditor(true);
+					}
+					else
+					{
+						BPActor->SetFolderPath(TEXT("Blueprints"));
+					}
 				}
 			}
 		}
@@ -1607,7 +1774,7 @@ namespace
 				}
 
 				TArray<TSharedPtr<FJsonValue>> Filtered;
-				FilterUMapAndCollectAssets(UMapArray, Filtered, ObjectList, OverrideMaterialList, ActorList);
+				FilterUMapAndCollectAssets(UMapArray, Filtered, ObjectList, OverrideMaterialList, ActorList, &Config);
 				// Do not overwrite UMapFile with Filtered array — preserving full array keeps CUE4Parse export indices valid for AttachParent resolution!
 			}
 
@@ -1625,7 +1792,7 @@ namespace
 				}
 				TArray<FString> DummyActors;
 				TArray<TSharedPtr<FJsonValue>> DummyFiltered;
-				FilterUMapAndCollectAssets(ActorArray, DummyFiltered, ObjectList, OverrideMaterialList, DummyActors);
+				FilterUMapAndCollectAssets(ActorArray, DummyFiltered, ObjectList, OverrideMaterialList, DummyActors, &Config);
 			}
 
 			const FString ObjectsAssetList = BuildAssetFile(FPaths::Combine(Paths.Root, TEXT("_assets_objects.txt")), ObjectList);
@@ -1875,6 +2042,8 @@ bool FUianaImporter::BuildConfig(const UUianaDataSettings& Settings, FUianaImpor
 	OutConfig.bImportBlueprints = Settings.ImportBlueprints;
 	OutConfig.bImportLights = Settings.ImportLights;
 	OutConfig.bImportMeshes = Settings.ImportMeshes;
+	OutConfig.bFilterMeshes = Settings.bFilterMeshes;
+	OutConfig.MeshFilterPrefixes = Settings.MeshFilterPrefixes;
 	OutConfig.bImportMaterials = Settings.ImportMaterials;
 	OutConfig.bImportSublevels = Settings.UseSubLevels;
 	OutConfig.LightmapResolutionMultiplier = FMath::Max(Settings.LightmapResolutionMultiplier, 0.01f);

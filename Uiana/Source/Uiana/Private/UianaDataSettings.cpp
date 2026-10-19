@@ -16,6 +16,11 @@ UUianaDataSettings::UUianaDataSettings(const FObjectInitializer& ObjectInitializ
 	PaksFolder.Path = TEXT("C:/Riot Games/VALORANT/live/ShooterGame/Content/Paks");
 	Map = TEXT("Ascent");
 	ImportMeshes = true;
+	bFilterMeshes = true;
+	MeshFilterPrefixes = {
+		TEXT("Floater_"),
+		TEXT("Wires_")
+	};
 	ImportMaterials = true;
 	ImportDecals = true;
 	bSkipBarrierDecals = true;

@@ -28,6 +28,12 @@ public:
 	UPROPERTY(config, EditAnywhere, Category = "Import Settings")
 	bool ImportMeshes;
 
+	UPROPERTY(config, EditAnywhere, Category = "Import Settings", meta = (DisplayName = "Filter Meshes"))
+	bool bFilterMeshes;
+
+	UPROPERTY(config, EditAnywhere, Category = "Import Settings", meta = (DisplayName = "Mesh Filter Prefixes", EditCondition = "bFilterMeshes"))
+	TArray<FString> MeshFilterPrefixes;
+
 	UPROPERTY(config, EditAnywhere, Category = "SubLevels")
 	bool UseSubLevels;
 

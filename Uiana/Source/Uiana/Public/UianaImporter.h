@@ -24,6 +24,11 @@ struct FUianaImportConfig
 	bool bImportBlueprints = true;
 	bool bImportLights = true;
 	bool bImportMeshes = true;
+	bool bFilterMeshes = true;
+	TArray<FString> MeshFilterPrefixes = {
+		TEXT("Floater_"),
+		TEXT("Wires_")
+	};
 	bool bImportMaterials = true;
 	bool bImportSublevels = true;
 	float LightmapResolutionMultiplier = 1.0f;
