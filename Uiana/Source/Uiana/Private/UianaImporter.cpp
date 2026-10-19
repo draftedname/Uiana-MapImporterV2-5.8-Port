@@ -1687,6 +1687,10 @@ namespace
 					if (LightComp)
 					{
 						LightComp->SetMobility(EComponentMobility::Movable);
+						if (Type != TEXT("DirectionalLightComponent"))
+						{
+							LightComp->SetCastShadows(false);
+						}
 
 						float IntensityVal = 4.5f;
 						if ((*Props)->TryGetNumberField(TEXT("Intensity"), IntensityVal) && IntensityVal > 0.0f)
@@ -1773,7 +1777,9 @@ namespace
 					PPV->Settings.bOverride_AutoExposureMaxBrightness = true;
 					PPV->Settings.AutoExposureMaxBrightness = 2.0f;
 					PPV->Settings.bOverride_AutoExposureBias = true;
-					PPV->Settings.AutoExposureBias = 0.0f;
+					PPV->Settings.AutoExposureBias = 0.5f;
+					PPV->Settings.bOverride_AmbientOcclusionIntensity = true;
+					PPV->Settings.AmbientOcclusionIntensity = 0.25f;
 					PPV->Settings.bOverride_ColorSaturation = true;
 					PPV->Settings.ColorSaturation = FVector4(1.08f, 1.08f, 1.08f, 1.0f);
 					PPV->Settings.bOverride_IndirectLightingIntensity = true;
