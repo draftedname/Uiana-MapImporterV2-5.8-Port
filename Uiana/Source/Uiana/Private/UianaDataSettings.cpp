@@ -18,6 +18,13 @@ UUianaDataSettings::UUianaDataSettings(const FObjectInitializer& ObjectInitializ
 	ImportMeshes = true;
 	ImportMaterials = true;
 	ImportDecals = true;
+	bSkipBarrierDecals = true;
+	DecalFilterPrefixes = {
+		TEXT("DomeSpawnMarker_"),
+		TEXT("GameObject_"),
+		TEXT("RGM_"),
+		TEXT("SpawnBarrier_")
+	};
 	ImportLights = true;
 	ImportBlueprints = true;
 	UseSubLevels = true;

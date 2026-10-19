@@ -37,6 +37,12 @@ public:
 	UPROPERTY(config, EditAnywhere, Category = "Import Settings")
 	bool ImportDecals;
 
+	UPROPERTY(config, EditAnywhere, Category = "Import Settings", meta = (DisplayName = "Skip Barrier and Out-Of-Bounds Decals"))
+	bool bSkipBarrierDecals;
+
+	UPROPERTY(config, EditAnywhere, Category = "Import Settings", meta = (DisplayName = "Decal Filter Prefixes", EditCondition = "bSkipBarrierDecals"))
+	TArray<FString> DecalFilterPrefixes;
+
 	UPROPERTY(config, EditAnywhere, Category = "Import Settings")
 	bool ImportLights;
 

@@ -14,6 +14,13 @@ struct FUianaImportConfig
 	FString MapName;
 
 	bool bImportDecals = true;
+	bool bSkipBarrierDecals = true;
+	TArray<FString> DecalFilterPrefixes = {
+		TEXT("DomeSpawnMarker_"),
+		TEXT("GameObject_"),
+		TEXT("RGM_"),
+		TEXT("SpawnBarrier_")
+	};
 	bool bImportBlueprints = true;
 	bool bImportLights = true;
 	bool bImportMeshes = true;

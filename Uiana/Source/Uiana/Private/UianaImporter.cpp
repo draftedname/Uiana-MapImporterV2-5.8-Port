@@ -1224,6 +1224,53 @@ namespace
 
 			if (Config.bImportDecals && Type == TEXT("DecalComponent"))
 			{
+				if (Config.bSkipBarrierDecals)
+				{
+					auto MatchesPrefix = [&](const FString& InStr) -> bool
+					{
+						if (InStr.IsEmpty()) return false;
+						for (const FString& Prefix : Config.DecalFilterPrefixes)
+						{
+							if (!Prefix.IsEmpty() && InStr.StartsWith(Prefix, ESearchCase::IgnoreCase))
+							{
+								return true;
+							}
+						}
+						return false;
+					};
+
+					bool bSkipBarrier = MatchesPrefix(OuterName);
+					if (!bSkipBarrier && OuterObj && (*OuterObj).IsValid())
+					{
+						FString RawOuterName;
+						if ((*OuterObj)->TryGetStringField(TEXT("ObjectName"), RawOuterName))
+						{
+							bSkipBarrier = MatchesPrefix(RawOuterName) || MatchesPrefix(ExtractCleanObjectName(RawOuterName));
+						}
+					}
+					if (!bSkipBarrier)
+					{
+						bSkipBarrier = MatchesPrefix(Obj->GetStringField(TEXT("Name")));
+					}
+
+					if (bSkipBarrier)
+					{
+						continue;
+					}
+				}
+
+				const TSharedPtr<FJsonObject>* DecalMaterialObj = nullptr;
+				UMaterialInterface* Mat = nullptr;
+				if ((*Props)->TryGetObjectField(TEXT("DecalMaterial"), DecalMaterialObj) && DecalMaterialObj && (*DecalMaterialObj).IsValid())
+				{
+					Mat = LoadMaterialFromRef(*DecalMaterialObj);
+				}
+
+				if (!Mat)
+				{
+					continue;
+				}
+
 				ADecalActor* Decal = World->SpawnActor<ADecalActor>(ADecalActor::StaticClass(), Transform);
 				if (!Decal || !Decal->GetDecal())
 				{
@@ -1231,6 +1278,7 @@ namespace
 				}
 				Decal->SetActorLabel(OuterName);
 				Decal->SetFolderPath(TEXT("Decals"));
+				Decal->GetDecal()->SetDecalMaterial(Mat);
 
 				const TSharedPtr<FJsonObject>* DecalSizeObj = nullptr;
 				if ((*Props)->TryGetObjectField(TEXT("DecalSize"), DecalSizeObj) && DecalSizeObj && (*DecalSizeObj).IsValid())
@@ -1241,14 +1289,30 @@ namespace
 					Decal->GetDecal()->DecalSize = FVector(DX, DY, DZ);
 				}
 
-				const TSharedPtr<FJsonObject>* DecalMaterial = nullptr;
-				if ((*Props)->TryGetObjectField(TEXT("DecalMaterial"), DecalMaterial) && DecalMaterial && (*DecalMaterial).IsValid())
+				int32 SortOrder = 0;
+				if ((*Props)->TryGetNumberField(TEXT("SortOrder"), SortOrder))
 				{
-					if (UMaterialInterface* Mat = LoadMaterialFromRef(*DecalMaterial))
-					{
-						Decal->GetDecal()->SetDecalMaterial(Mat);
-					}
+					Decal->GetDecal()->SetSortOrder(SortOrder);
 				}
+
+				const TSharedPtr<FJsonObject>* LightColorOverrideObj = nullptr;
+				if ((*Props)->TryGetObjectField(TEXT("LightColorOverride"), LightColorOverrideObj) && LightColorOverrideObj && (*LightColorOverrideObj).IsValid())
+				{
+					int32 R = 255, G = 255, B = 255, A = 255;
+					(*LightColorOverrideObj)->TryGetNumberField(TEXT("R"), R);
+					(*LightColorOverrideObj)->TryGetNumberField(TEXT("G"), G);
+					(*LightColorOverrideObj)->TryGetNumberField(TEXT("B"), B);
+					(*LightColorOverrideObj)->TryGetNumberField(TEXT("A"), A);
+
+					const FColor SrgbColor(
+						FMath::Clamp(R, 0, 255),
+						FMath::Clamp(G, 0, 255),
+						FMath::Clamp(B, 0, 255),
+						FMath::Clamp(A, 0, 255)
+					);
+					Decal->GetDecal()->SetDecalColor(FLinearColor(SrgbColor));
+				}
+
 				continue;
 			}
 
@@ -1806,6 +1870,8 @@ bool FUianaImporter::BuildConfig(const UUianaDataSettings& Settings, FUianaImpor
 	OutConfig.ExportRoot = Settings.ExportFolder.Path;
 	OutConfig.PaksRoot = Settings.PaksFolder.Path;
 	OutConfig.bImportDecals = Settings.ImportDecals;
+	OutConfig.bSkipBarrierDecals = Settings.bSkipBarrierDecals;
+	OutConfig.DecalFilterPrefixes = Settings.DecalFilterPrefixes;
 	OutConfig.bImportBlueprints = Settings.ImportBlueprints;
 	OutConfig.bImportLights = Settings.ImportLights;
 	OutConfig.bImportMeshes = Settings.ImportMeshes;
