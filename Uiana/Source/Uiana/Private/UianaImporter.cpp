@@ -812,25 +812,6 @@ namespace
 				ParentName = TEXT("BaseEnv_Unlit_Texture_MAT_V4");
 			}
 
-			FString PhysMatName;
-			const TSharedPtr<FJsonObject>* PhysMatObj = nullptr;
-			if ((*Props)->TryGetObjectField(TEXT("PhysMaterial"), PhysMatObj) && PhysMatObj && (*PhysMatObj).IsValid())
-			{
-				PhysMatName = GetRefName(*PhysMatObj);
-			}
-
-			const bool bForceOpaque = MaterialName.StartsWith(TEXT("Windows"), ESearchCase::IgnoreCase) ||
-				MaterialName.StartsWith(TEXT("Window"), ESearchCase::IgnoreCase) ||
-				MaterialName.Contains(TEXT("GlassShard"), ESearchCase::IgnoreCase) ||
-				MaterialName.Contains(TEXT("LightFixtureGlass"), ESearchCase::IgnoreCase) ||
-				MaterialName.Contains(TEXT("Shard_0_Box"), ESearchCase::IgnoreCase);
-
-			// Glass check: physical material or naming pattern
-			const bool bIsGlass = !bForceOpaque && (PhysMatName.Equals(TEXT("M_Glass"), ESearchCase::IgnoreCase) ||
-				MaterialName.Contains(TEXT("Glass_")) ||
-				MaterialName.Contains(TEXT("GlassWarped")) ||
-				MaterialName.Contains(TEXT("Panes")));
-
 			// Foliage check: package path or foliage naming pattern (excluding bark, trunk, planter)
 			const FString PackagePath = RootObj->GetStringField(TEXT("Package"));
 			const bool bIsFoliage = (PackagePath.Contains(TEXT("/Foliage/")) ||
@@ -856,10 +837,6 @@ namespace
 			if (MaterialName.StartsWith(TEXT("Vista_"), ESearchCase::IgnoreCase))
 			{
 				ParentName = TEXT("BaseEnv_Unlit_Texture_MAT_V4");
-			}
-			else if (bIsGlass || (!bForceOpaque && ParentName == TEXT("BaseOpacitySpecEnv_MAT")))
-			{
-				ParentName = TEXT("BaseOpacity_RGB_Env_MAT");
 			}
 			else if (bIsFoliage)
 			{
