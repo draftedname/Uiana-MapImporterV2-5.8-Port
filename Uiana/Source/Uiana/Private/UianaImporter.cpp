@@ -39,6 +39,8 @@
 #include "Misc/Paths.h"
 #include "Misc/ScopedSlowTask.h"
 #include "Misc/PackageName.h"
+#include "Misc/MessageDialog.h"
+#include "UianaConfigManager.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 #include "UObject/SavePackage.h"
@@ -674,24 +676,61 @@ namespace
 			{
 				TSharedPtr<FJsonObject> Obj = Val->AsObject();
 				if (!Obj.IsValid()) continue;
-				const TSharedPtr<FJsonObject>* Props = nullptr;
-				if (!Obj->TryGetObjectField(TEXT("Properties"), Props) || !Props || !(*Props).IsValid()) continue;
-				const TArray<TSharedPtr<FJsonValue>>* TexParams = nullptr;
-				if ((*Props)->TryGetArrayField(TEXT("TextureParameterValues"), TexParams) && TexParams)
+
+				auto AddTexPath = [&](const FString& ObjPath)
 				{
-					for (const auto& TP : *TexParams)
+					if (!ObjPath.IsEmpty())
 					{
-						TSharedPtr<FJsonObject> TPObj = TP->AsObject();
-						if (!TPObj.IsValid()) continue;
-						const TSharedPtr<FJsonObject>* PVal = nullptr;
-						if (TPObj->TryGetObjectField(TEXT("ParameterValue"), PVal) && PVal && (*PVal).IsValid())
+						FString Normalized = ToBackslashObjectPath(ObjPath);
+						Normalized = PathConvert(Normalized);
+						OutTexturePaths.Add(Normalized);
+					}
+				};
+
+				const TSharedPtr<FJsonObject>* Props = nullptr;
+				if (Obj->TryGetObjectField(TEXT("Properties"), Props) && Props && (*Props).IsValid())
+				{
+					const TArray<TSharedPtr<FJsonValue>>* TexParams = nullptr;
+					if ((*Props)->TryGetArrayField(TEXT("TextureParameterValues"), TexParams) && TexParams)
+					{
+						for (const auto& TP : *TexParams)
 						{
-							FString ObjPath = (*PVal)->GetStringField(TEXT("ObjectPath"));
-							if (!ObjPath.IsEmpty())
+							TSharedPtr<FJsonObject> TPObj = TP->AsObject();
+							if (!TPObj.IsValid()) continue;
+							const TSharedPtr<FJsonObject>* PVal = nullptr;
+							if (TPObj->TryGetObjectField(TEXT("ParameterValue"), PVal) && PVal && (*PVal).IsValid())
 							{
-								FString Normalized = ToBackslashObjectPath(ObjPath);
-								Normalized = PathConvert(Normalized);
-								OutTexturePaths.Add(Normalized);
+								AddTexPath((*PVal)->GetStringField(TEXT("ObjectPath")));
+							}
+						}
+					}
+				}
+
+				const TArray<TSharedPtr<FJsonValue>>* RootRefTextures = nullptr;
+				if (Obj->TryGetArrayField(TEXT("ReferencedTextures"), RootRefTextures) && RootRefTextures)
+				{
+					for (const auto& RT : *RootRefTextures)
+					{
+						TSharedPtr<FJsonObject> RTObj = RT->AsObject();
+						if (RTObj.IsValid())
+						{
+							AddTexPath(RTObj->GetStringField(TEXT("ObjectPath")));
+						}
+					}
+				}
+
+				const TSharedPtr<FJsonObject>* CachedData = nullptr;
+				if (Obj->TryGetObjectField(TEXT("CachedExpressionData"), CachedData) && CachedData && (*CachedData).IsValid())
+				{
+					const TArray<TSharedPtr<FJsonValue>>* CachedRefTextures = nullptr;
+					if ((*CachedData)->TryGetArrayField(TEXT("ReferencedTextures"), CachedRefTextures) && CachedRefTextures)
+					{
+						for (const auto& RT : *CachedRefTextures)
+						{
+							TSharedPtr<FJsonObject> RTObj = RT->AsObject();
+							if (RTObj.IsValid())
+							{
+								AddTexPath(RTObj->GetStringField(TEXT("ObjectPath")));
 							}
 						}
 					}
@@ -714,33 +753,9 @@ namespace
 			return;
 		}
 
-		const TSharedPtr<FJsonObject>* Props = nullptr;
-		if (!RootObj->TryGetObjectField(TEXT("Properties"), Props) || !(*Props).IsValid())
+		auto AddTexturePath = [&](const FString& ObjectPath)
 		{
-			return;
-		}
-
-		const TArray<TSharedPtr<FJsonValue>>* TextureParams = nullptr;
-		if (!(*Props)->TryGetArrayField(TEXT("TextureParameterValues"), TextureParams) || !TextureParams)
-		{
-			return;
-		}
-
-		for (const TSharedPtr<FJsonValue>& ParamValue : *TextureParams)
-		{
-			const TSharedPtr<FJsonObject> ParamObj = ParamValue->AsObject();
-			if (!ParamObj.IsValid())
-			{
-				continue;
-			}
-
-			const TSharedPtr<FJsonObject>* ParameterValueObj = nullptr;
-			if (!ParamObj->TryGetObjectField(TEXT("ParameterValue"), ParameterValueObj) || !(*ParameterValueObj).IsValid())
-			{
-				continue;
-			}
-
-			const FString ObjectPath = (*ParameterValueObj)->GetStringField(TEXT("ObjectPath"));
+			if (ObjectPath.IsEmpty()) return;
 			FString NoExt = ObjectPath;
 			int32 DotIndex = INDEX_NONE;
 			if (NoExt.FindChar(TEXT('.'), DotIndex))
@@ -752,6 +767,51 @@ namespace
 			if (FPaths::FileExists(LocalPath))
 			{
 				InOutTextures.Add(LocalPath);
+			}
+		};
+
+		const TSharedPtr<FJsonObject>* Props = nullptr;
+		if (RootObj->TryGetObjectField(TEXT("Properties"), Props) && (*Props).IsValid())
+		{
+			const TArray<TSharedPtr<FJsonValue>>* TextureParams = nullptr;
+			if ((*Props)->TryGetArrayField(TEXT("TextureParameterValues"), TextureParams) && TextureParams)
+			{
+				for (const TSharedPtr<FJsonValue>& ParamValue : *TextureParams)
+				{
+					const TSharedPtr<FJsonObject> ParamObj = ParamValue->AsObject();
+					if (!ParamObj.IsValid()) continue;
+					const TSharedPtr<FJsonObject>* ParameterValueObj = nullptr;
+					if (ParamObj->TryGetObjectField(TEXT("ParameterValue"), ParameterValueObj) && (*ParameterValueObj).IsValid())
+					{
+						AddTexturePath((*ParameterValueObj)->GetStringField(TEXT("ObjectPath")));
+					}
+				}
+			}
+		}
+
+		auto ProcessRefTextures = [&](const TArray<TSharedPtr<FJsonValue>>* RefTextures)
+		{
+			if (!RefTextures) return;
+			for (const auto& RT : *RefTextures)
+			{
+				const TSharedPtr<FJsonObject> RTObj = RT->AsObject();
+				if (!RTObj.IsValid()) continue;
+				AddTexturePath(RTObj->GetStringField(TEXT("ObjectPath")));
+			}
+		};
+
+		const TArray<TSharedPtr<FJsonValue>>* RootRefTextures = nullptr;
+		if (RootObj->TryGetArrayField(TEXT("ReferencedTextures"), RootRefTextures))
+		{
+			ProcessRefTextures(RootRefTextures);
+		}
+		const TSharedPtr<FJsonObject>* CachedData = nullptr;
+		if (RootObj->TryGetObjectField(TEXT("CachedExpressionData"), CachedData) && CachedData && (*CachedData).IsValid())
+		{
+			const TArray<TSharedPtr<FJsonValue>>* CachedRefTextures = nullptr;
+			if ((*CachedData)->TryGetArrayField(TEXT("ReferencedTextures"), CachedRefTextures))
+			{
+				ProcessRefTextures(CachedRefTextures);
 			}
 		}
 	}
@@ -800,79 +860,29 @@ namespace
 				continue;
 			}
 
-			FString ParentName = TEXT("BaseEnv_MAT_V4");
+			FString IncomingParentName;
 			const TSharedPtr<FJsonObject>* ParentObj = nullptr;
 			if ((*Props)->TryGetObjectField(TEXT("Parent"), ParentObj) && ParentObj && (*ParentObj).IsValid())
 			{
-				ParentName = GetRefName(*ParentObj);
-				if (ParentName.IsEmpty() || ParentName == TEXT("BaseOpacity_RGB_Env_MAT") || ParentName == TEXT("BaseOpacitySpecEnv_MAT") || ParentName == TEXT("HorizontalParallax"))
-				{
-					ParentName = TEXT("BaseEnv_MAT_V4");
-				}
-			}
-			else if (MaterialName.StartsWith(TEXT("M_Sky_")))
-			{
-				ParentName = TEXT("BaseEnv_Unlit_Texture_MAT_V4");
+				IncomingParentName = GetRefName(*ParentObj);
 			}
 
-			// Foliage check: package path or foliage naming pattern (excluding bark, trunk, planter)
 			const FString PackagePath = RootObj->GetStringField(TEXT("Package"));
-			const bool bIsFoliage = (PackagePath.Contains(TEXT("/Foliage/")) ||
-				MaterialName.StartsWith(TEXT("Foliage_")) ||
-				MaterialName.Contains(TEXT("VegetationLeaves")) ||
-				MaterialName.Contains(TEXT("BeechGreenFoliage")) ||
-				MaterialName.Contains(TEXT("Arborvitae")) ||
-				MaterialName.Contains(TEXT("Conifer")) ||
-				MaterialName.Contains(TEXT("Ivy_")) ||
-				MaterialName.Contains(TEXT("Flowers")) ||
-				MaterialName.Contains(TEXT("PlantAlpha")) ||
-				MaterialName.Contains(TEXT("Grass_M0_Cards")) ||
-				MaterialName.Contains(TEXT("PlantPotted_0_M0_A")) ||
-				MaterialName.Contains(TEXT("PlantPotted_0_M1_B")) ||
-				MaterialName.Contains(TEXT("PlantPotted_0_M4_Hanging")) ||
-				MaterialName.Contains(TEXT("PlantPotted_0_M5_Hanging")) ||
-				MaterialName.Contains(TEXT("Plant_0_M0_corner")) ||
-				MaterialName.Contains(TEXT("Plant_0_M0_Dead"))) &&
-				!MaterialName.Contains(TEXT("Trunk")) &&
-				!MaterialName.Contains(TEXT("Bark")) &&
-				!MaterialName.Contains(TEXT("Planter"));
-
-			if (MaterialName.StartsWith(TEXT("Vista_"), ESearchCase::IgnoreCase))
-			{
-				ParentName = TEXT("BaseEnv_Unlit_Texture_MAT_V4");
-			}
-			else if (bIsFoliage)
-			{
-				ParentName = TEXT("BaseEnv_MAT_V4_Foliage");
-			}
-			else if (ParentName == TEXT("0_Waterfall_Base1") || ParentName == TEXT("0_Waterfall_Vista1"))
-			{
-				ParentName = TEXT("0_Waterfall_Base");
-			}
+			const FString ResolvedParent = FUianaConfigManager::Get().ResolveParentMaterial(MaterialName, IncomingParentName, PackagePath);
 
 			UMaterialInterface* ParentMat = nullptr;
-			if (MaterialName.StartsWith(TEXT("M_Sky_")))
+			if (ResolvedParent.StartsWith(TEXT("/")))
 			{
-				const FString DirectSky = FString::Printf(TEXT("/Uiana/Materials/%s.%s"), *MaterialName, *MaterialName);
-				ParentMat = Cast<UMaterialInterface>(StaticLoadObject(UMaterialInterface::StaticClass(), nullptr, *DirectSky));
-				if (!ParentMat)
-				{
-					ParentMat = Cast<UMaterialInterface>(StaticLoadObject(UMaterialInterface::StaticClass(), nullptr, TEXT("/Uiana/Materials/BaseEnv_Unlit_Texture_MAT_V4.BaseEnv_Unlit_Texture_MAT_V4")));
-				}
+				ParentMat = Cast<UMaterialInterface>(StaticLoadObject(UMaterialInterface::StaticClass(), nullptr, *ResolvedParent));
 			}
-			if (!ParentMat && (ParentName == TEXT("BaseEnv_MAT_V4_Foliage") || ParentName == TEXT("BaseOpacity_RGB_Env_MAT") || ParentName == TEXT("0_Waterfall_Base") || ParentName == TEXT("BaseEnv_Unlit_Texture_MAT_V4")))
+			if (!ParentMat && !ResolvedParent.IsEmpty() && ResolvedParent != TEXT("BaseEnv_MAT_V4"))
 			{
-				const FString PluginMatPath = FString::Printf(TEXT("/Uiana/Materials/%s.%s"), *ParentName, *ParentName);
-				ParentMat = Cast<UMaterialInterface>(StaticLoadObject(UMaterialInterface::StaticClass(), nullptr, *PluginMatPath));
-			}
-			if (!ParentMat && !ParentName.IsEmpty() && ParentName != TEXT("BaseEnv_MAT_V4"))
-			{
-				const FString ValoMatPath = FString::Printf(TEXT("/Game/ValorantContent/Materials/%s.%s"), *ParentName, *ParentName);
+				const FString ValoMatPath = FString::Printf(TEXT("/Game/ValorantContent/Materials/%s.%s"), *ResolvedParent, *ResolvedParent);
 				ParentMat = Cast<UMaterialInterface>(StaticLoadObject(UMaterialInterface::StaticClass(), nullptr, *ValoMatPath));
 			}
-			if (!ParentMat && !ParentName.IsEmpty())
+			if (!ParentMat && !ResolvedParent.IsEmpty())
 			{
-				const FString PluginMatPath = FString::Printf(TEXT("/Uiana/Materials/%s.%s"), *ParentName, *ParentName);
+				const FString PluginMatPath = FString::Printf(TEXT("/Uiana/Materials/%s.%s"), *ResolvedParent, *ResolvedParent);
 				ParentMat = Cast<UMaterialInterface>(StaticLoadObject(UMaterialInterface::StaticClass(), nullptr, *PluginMatPath));
 			}
 			if (!ParentMat)
@@ -928,10 +938,8 @@ namespace
 						(*ParamValue)->GetNumberField(TEXT("B")),
 						(*ParamValue)->GetNumberField(TEXT("A")));
 
-					// Clamp non-emissive diffuse/tint multipliers to [0.0, 1.0] to prevent PBR blowout (e.g. AScaffold_0_M0_Kit_MI with DiffuseColor 2.0)
-					if (RawParamName == TEXT("diffusecolor") || RawParamName == TEXT("diffuse color") ||
-					    RawParamName == TEXT("tint") || RawParamName == TEXT("color mult") ||
-					    RawParamName == TEXT("layer a tint") || RawParamName == TEXT("layer b tint"))
+					// Clamp non-emissive diffuse/tint multipliers to [0.0, 1.0] if configured
+					if (FUianaConfigManager::Get().ShouldClampVectorParameter(RawParamName))
 					{
 						Color.R = FMath::Clamp(Color.R, 0.0f, 1.0f);
 						Color.G = FMath::Clamp(Color.G, 0.0f, 1.0f);
@@ -940,17 +948,17 @@ namespace
 
 					UMaterialEditingLibrary::SetMaterialInstanceVectorParameterValue(MIC, ParamName, Color);
 
-					if (ParentName == TEXT("BaseOpacity_RGB_Env_MAT"))
+					TArray<FName> VectorSecondaryRoutes;
+					FUianaConfigManager::Get().QuerySecondaryRoutes(IncomingParentName, RawParamName, TEXT("Vector"), VectorSecondaryRoutes);
+					for (const FName& RouteParam : VectorSecondaryRoutes)
 					{
-						if (RawParamName == TEXT("diffusecolor") || RawParamName == TEXT("tint") || RawParamName == TEXT("color mult"))
-						{
-							UMaterialEditingLibrary::SetMaterialInstanceVectorParameterValue(MIC, FName(TEXT("color mult")), Color);
-						}
+						UMaterialEditingLibrary::SetMaterialInstanceVectorParameterValue(MIC, RouteParam, Color);
 					}
 				}
 			}
 
 			const TArray<TSharedPtr<FJsonValue>>* TextureParams = nullptr;
+			int32 BoundTextureCount = 0;
 			if ((*Props)->TryGetArrayField(TEXT("TextureParameterValues"), TextureParams) && TextureParams)
 			{
 				for (const TSharedPtr<FJsonValue>& Entry : *TextureParams)
@@ -971,29 +979,71 @@ namespace
 					const FString TexturePath = FString::Printf(TEXT("/Game/ValorantContent/Textures/%s.%s"), *TextureName, *TextureName);
 					if (UTexture* Texture = Cast<UTexture>(StaticLoadObject(UTexture::StaticClass(), nullptr, *TexturePath)))
 					{
+						BoundTextureCount++;
 						const FString RawParamName = (*ParamInfo)->GetStringField(TEXT("Name")).ToLower();
 						const FName ParamName(*RawParamName);
 						UMaterialEditingLibrary::SetMaterialInstanceTextureParameterValue(MIC, ParamName, Texture);
 
 						// Map common Valorant aliases to standard Uiana master material parameter names
-						if (RawParamName == TEXT("materialtexture") || RawParamName == TEXT("diffusetex") || RawParamName == TEXT("diffuse a") || RawParamName == TEXT("albedo") || RawParamName == TEXT("texture rgb"))
+						const FName CanonicalAlias = FUianaConfigManager::Get().ResolveParameterAlias(RawParamName, NAME_None);
+						if (CanonicalAlias != NAME_None)
 						{
-							UMaterialEditingLibrary::SetMaterialInstanceTextureParameterValue(MIC, FName(TEXT("diffuse")), Texture);
-						}
-						else if (RawParamName == TEXT("additonalnormal") || RawParamName == TEXT("texture a normal") || RawParamName == TEXT("normal a"))
-						{
-							UMaterialEditingLibrary::SetMaterialInstanceTextureParameterValue(MIC, FName(TEXT("normal")), Texture);
-						}
-						else if (RawParamName == TEXT("mra a") || RawParamName == TEXT("mra_texture"))
-						{
-							UMaterialEditingLibrary::SetMaterialInstanceTextureParameterValue(MIC, FName(TEXT("mra")), Texture);
+							UMaterialEditingLibrary::SetMaterialInstanceTextureParameterValue(MIC, CanonicalAlias, Texture);
 						}
 
-						if (ParentName == TEXT("BaseOpacity_RGB_Env_MAT"))
+						TArray<FName> TexSecondaryRoutes;
+						FUianaConfigManager::Get().QuerySecondaryRoutes(IncomingParentName, RawParamName, TEXT("Texture"), TexSecondaryRoutes);
+						for (const FName& RouteParam : TexSecondaryRoutes)
 						{
-							if (RawParamName == TEXT("diffuse") || RawParamName == TEXT("materialtexture") || RawParamName == TEXT("diffusetex") || RawParamName == TEXT("albedo"))
+							UMaterialEditingLibrary::SetMaterialInstanceTextureParameterValue(MIC, RouteParam, Texture);
+						}
+					}
+				}
+			}
+
+			// Fallback: If no texture parameters were bound (e.g. Material assets like skyboxes or roofs), parse ReferencedTextures
+			if (FUianaConfigManager::Get().GetRules().Flags.bEnableReferencedTextureFallback && BoundTextureCount == 0)
+			{
+				const TArray<TSharedPtr<FJsonValue>>* RefTextures = nullptr;
+				if (!RootObj->TryGetArrayField(TEXT("ReferencedTextures"), RefTextures) || !RefTextures || RefTextures->Num() == 0)
+				{
+					const TSharedPtr<FJsonObject>* CachedData = nullptr;
+					if (RootObj->TryGetObjectField(TEXT("CachedExpressionData"), CachedData) && CachedData && (*CachedData).IsValid())
+					{
+						(*CachedData)->TryGetArrayField(TEXT("ReferencedTextures"), RefTextures);
+					}
+				}
+
+				if (RefTextures && RefTextures->Num() > 0)
+				{
+					for (const TSharedPtr<FJsonValue>& Entry : *RefTextures)
+					{
+						const TSharedPtr<FJsonObject> Obj = Entry->AsObject();
+						if (!Obj.IsValid()) continue;
+						const FString TextureName = GetRefName(Obj);
+						if (TextureName.IsEmpty()) continue;
+						const FString TexturePath = FString::Printf(TEXT("/Game/ValorantContent/Textures/%s.%s"), *TextureName, *TextureName);
+						if (UTexture* Texture = Cast<UTexture>(StaticLoadObject(UTexture::StaticClass(), nullptr, *TexturePath)))
+						{
+							const FString LowerName = TextureName.ToLower();
+							if (LowerName.Contains(TEXT("_nm")) || LowerName.Contains(TEXT("_normal")) || LowerName.EndsWith(TEXT("_n")))
 							{
-								UMaterialEditingLibrary::SetMaterialInstanceTextureParameterValue(MIC, FName(TEXT("RGBA")), Texture);
+								UMaterialEditingLibrary::SetMaterialInstanceTextureParameterValue(MIC, FName(TEXT("normal")), Texture);
+							}
+							else if (LowerName.Contains(TEXT("_mra")) || LowerName.Contains(TEXT("_masks")) || LowerName.EndsWith(TEXT("_m")))
+							{
+								UMaterialEditingLibrary::SetMaterialInstanceTextureParameterValue(MIC, FName(TEXT("mra")), Texture);
+							}
+							else
+							{
+								// Diffuse / albedo / skybox default
+								UMaterialEditingLibrary::SetMaterialInstanceTextureParameterValue(MIC, FName(TEXT("diffuse")), Texture);
+								TArray<FName> FallbackRoutes;
+								FUianaConfigManager::Get().QuerySecondaryRoutes(IncomingParentName, TEXT("diffuse"), TEXT("Texture"), FallbackRoutes);
+								for (const FName& RouteParam : FallbackRoutes)
+								{
+									UMaterialEditingLibrary::SetMaterialInstanceTextureParameterValue(MIC, RouteParam, Texture);
+								}
 							}
 						}
 					}
@@ -1326,7 +1376,7 @@ namespace
 							}
 							else
 							{
-								const FString SlotName = UBPFL::ResolveCleanMaterialVariation(StaticMats[SlotIdx].MaterialSlotName.ToString());
+								const FString SlotName = UBPFL::ResolveCleanMaterialVariation(StaticMats[SlotIdx].MaterialSlotName.ToString(), LoadedMesh ? LoadedMesh->GetName() : FString(), SlotIdx);
 								if (!SlotName.IsEmpty() && SlotName != TEXT("WorldGridMaterial") && SlotName != TEXT("DefaultMaterial") && !SlotName.StartsWith(TEXT("MaterialSlot_")))
 								{
 									FString MatPath = FString::Printf(TEXT("/Game/ValorantContent/Materials/%s.%s"), *SlotName, *SlotName);
@@ -1345,8 +1395,8 @@ namespace
 						}
 					}
 
-					// Forward Shading DX11 guard: HISM cannot render mixed opaque and translucent sections without crashing FBasePassMeshProcessor
-					if (Comp->IsA<UHierarchicalInstancedStaticMeshComponent>())
+					// Optional HISM mixed opaque and translucent guard (controlled via MaterialRules.json Flags.bEnableHismMixedSlotGuard)
+					if (FUianaConfigManager::Get().GetRules().Flags.bEnableHismMixedSlotGuard && Comp->IsA<UHierarchicalInstancedStaticMeshComponent>())
 					{
 						bool bHasOpaque = false;
 						for (int32 SlotIdx = 0; SlotIdx < Comp->GetNumMaterials(); ++SlotIdx)
@@ -1932,6 +1982,14 @@ namespace
 
 	bool PortedImportMap(const FUianaImportConfig& Config)
 	{
+		FText ErrorMessage;
+		if (!FUianaConfigManager::Get().LoadRules(ErrorMessage))
+		{
+			UE_LOG(LogTemp, Error, TEXT("Uiana Import Aborted: %s"), *ErrorMessage.ToString());
+			FMessageDialog::Open(EAppMsgType::Ok, ErrorMessage);
+			return false;
+		}
+
 		const FMapPaths Paths = MakeMapPaths(Config);
 		EnsureMapDirectories(Config, Paths);
 
@@ -2394,6 +2452,7 @@ namespace
 			}
 		}
 
+		FUianaConfigManager::Get().DumpMatchStatistics();
 		return true;
 	}
 }

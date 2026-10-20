@@ -54,6 +54,6 @@ public:
 	static bool ImportValorantMap(FString MapName, FString PaksFolder, FString ExportFolder, bool bImportMeshes = true, bool bImportMaterials = true, bool bImportLights = true, bool bImportDecals = false);
 
 	UFUNCTION(BlueprintCallable, Category = "Uiana")
-	static FString ResolveCleanMaterialVariation(const FString& InMatName);
+	static FString ResolveCleanMaterialVariation(const FString& InMatName, const FString& MeshName = TEXT(""), int32 SlotIndex = -1);
 
 };

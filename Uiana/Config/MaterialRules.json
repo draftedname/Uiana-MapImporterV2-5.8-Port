@@ -1,0 +1,296 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "SchemaVersion": 1,
+  "Flags": {
+    "bEnableHismMixedSlotGuard": false,
+    "bEnableDiffuseVectorClamping": true,
+    "bEnableReferencedTextureFallback": true,
+    "bEnableVariationWordStripping": true
+  },
+  "ClampVectorParameters": [
+    "diffusecolor",
+    "diffuse color",
+    "tint",
+    "color mult",
+    "layer a tint",
+    "layer b tint"
+  ],
+  "ParameterAliases": {
+    "materialtexture": "diffuse",
+    "diffusetex": "diffuse",
+    "diffuse a": "diffuse",
+    "albedo": "diffuse",
+    "texture rgb": "diffuse",
+    "albedo a texture": "diffuse",
+    "texture": "diffuse",
+    "additonalnormal": "normal",
+    "texture a normal": "normal",
+    "normal a": "normal",
+    "normal a texture": "normal",
+    "normal_1": "normal",
+    "mra a": "mra",
+    "mra_texture": "mra"
+  },
+  "SecondaryParameterRoutes": [
+    {
+      "ParentCondition": "BaseOpacity_RGB_Env_MAT",
+      "SourceParamAliases": [
+        "diffuse",
+        "materialtexture",
+        "diffusetex",
+        "albedo"
+      ],
+      "TargetParam": "RGBA",
+      "Type": "Texture"
+    },
+    {
+      "ParentCondition": "BaseOpacity_RGB_Env_MAT",
+      "SourceParamAliases": [
+        "diffusecolor",
+        "tint",
+        "color mult"
+      ],
+      "TargetParam": "color mult",
+      "Type": "Vector"
+    }
+  ],
+  "DccPlaceholderPrefixes": [
+    "lambert",
+    "phong",
+    "blinn",
+    "Default",
+    "MaterialSlot_",
+    "WorldGridMaterial",
+    "DefaultMaterial"
+  ],
+  "ParentRules": [
+    {
+      "RuleName": "SkyDomeDirect",
+      "Priority": 5,
+      "MatchTarget": "MaterialName",
+      "MatchType": "Prefix",
+      "bCaseSensitive": false,
+      "Patterns": [
+        "M_Sky_"
+      ],
+      "ExcludePatterns": [],
+      "TargetParent": "/Uiana/Materials/{MaterialName}.{MaterialName}"
+    },
+    {
+      "RuleName": "SkyDomeUnlit",
+      "Priority": 10,
+      "MatchTarget": "MaterialName",
+      "MatchType": "Prefix",
+      "bCaseSensitive": false,
+      "Patterns": [
+        "M_Sky_"
+      ],
+      "ExcludePatterns": [],
+      "TargetParent": "/Uiana/Materials/BaseEnv_Unlit_Texture_MAT_V4.BaseEnv_Unlit_Texture_MAT_V4"
+    },
+    {
+      "RuleName": "VistaUnlit",
+      "Priority": 20,
+      "MatchTarget": "MaterialName",
+      "MatchType": "Prefix",
+      "bCaseSensitive": false,
+      "Patterns": [
+        "Vista_"
+      ],
+      "ExcludePatterns": [],
+      "TargetParent": "/Uiana/Materials/BaseEnv_Unlit_Texture_MAT_V4.BaseEnv_Unlit_Texture_MAT_V4"
+    },
+    {
+      "RuleName": "FoliageMasked",
+      "Priority": 30,
+      "MatchTarget": "MaterialName",
+      "MatchType": "Contains",
+      "bCaseSensitive": false,
+      "Patterns": [
+        "/Foliage/",
+        "Foliage_",
+        "VegetationLeaves",
+        "BeechGreenFoliage",
+        "Arborvitae",
+        "Conifer",
+        "Ivy_",
+        "Flowers",
+        "PlantAlpha",
+        "Grass_M0_Cards",
+        "PlantPotted_0_M0_A",
+        "PlantPotted_0_M1_B",
+        "PlantPotted_0_M4_Hanging",
+        "PlantPotted_0_M5_Hanging",
+        "Plant_0_M0_corner",
+        "Plant_0_M0_Dead"
+      ],
+      "ExcludePatterns": [
+        "Trunk",
+        "Bark",
+        "Planter"
+      ],
+      "TargetParent": "/Uiana/Materials/BaseEnv_MAT_V4_Foliage.BaseEnv_MAT_V4_Foliage"
+    },
+    {
+      "RuleName": "WaterfallBase",
+      "Priority": 40,
+      "MatchTarget": "ParentName",
+      "MatchType": "Exact",
+      "bCaseSensitive": true,
+      "Patterns": [
+        "0_Waterfall_Base1",
+        "0_Waterfall_Vista1",
+        "0_Waterfall_Base"
+      ],
+      "ExcludePatterns": [],
+      "TargetParent": "/Uiana/Materials/0_Waterfall_Base.0_Waterfall_Base"
+    },
+    {
+      "RuleName": "TranslucentDecalOpaqueFallback",
+      "Priority": 50,
+      "MatchTarget": "ParentName",
+      "MatchType": "Exact",
+      "bCaseSensitive": true,
+      "Patterns": [
+        "BaseOpacity_RGB_Env_MAT",
+        "BaseOpacitySpecEnv_MAT",
+        "HorizontalParallax"
+      ],
+      "ExcludePatterns": [],
+      "TargetParent": "/Uiana/Materials/BaseEnv_MAT_V4.BaseEnv_MAT_V4"
+    }
+  ],
+  "SlotOverrides": [
+    {
+      "RuleName": "MidFloorSlot0",
+      "Priority": 10,
+      "MeshName": "MidFloor_1",
+      "SlotIndex": 0,
+      "Patterns": [],
+      "ConditionWords": [],
+      "Candidates": [],
+      "TargetMaterial": "Brick_M6_HerringBoneBroken_MI"
+    },
+    {
+      "RuleName": "MidFloorSlot1",
+      "Priority": 11,
+      "MeshName": "MidFloor_1",
+      "SlotIndex": 1,
+      "Patterns": [],
+      "ConditionWords": [],
+      "Candidates": [],
+      "TargetMaterial": "Brick_M6_HerringBoneAsphalt_MI"
+    },
+    {
+      "RuleName": "StoneM2StepsTypoFix",
+      "Priority": 12,
+      "MeshName": "",
+      "SlotIndex": -1,
+      "Patterns": [
+        "Stone_M2_Steps_MI1"
+      ],
+      "ConditionWords": [],
+      "Candidates": [],
+      "TargetMaterial": "Stone_M2_Steps_MI"
+    },
+    {
+      "RuleName": "StoneSquareTilesBlend",
+      "Priority": 20,
+      "MeshName": "",
+      "SlotIndex": -1,
+      "Patterns": [
+        "StoneTile",
+        "SquareTile"
+      ],
+      "ConditionWords": [
+        "Blend",
+        "Grass",
+        "Moss",
+        "Mud",
+        "Dirt"
+      ],
+      "Candidates": [],
+      "TargetMaterial": "Stone_M1_SquareTiles_MI"
+    },
+    {
+      "RuleName": "HerringBoneVariations",
+      "Priority": 30,
+      "MeshName": "",
+      "SlotIndex": -1,
+      "Patterns": [
+        "HerringBone"
+      ],
+      "ConditionWords": [
+        "Grass",
+        "Water",
+        "Mud"
+      ],
+      "Candidates": [
+        "Brick_M6_HerringBoneBroken_MI",
+        "Brick_M6_HerringBone_MI"
+      ],
+      "TargetMaterial": ""
+    },
+    {
+      "RuleName": "ConcreteBlends",
+      "Priority": 40,
+      "MeshName": "",
+      "SlotIndex": -1,
+      "Patterns": [
+        "Concrete_"
+      ],
+      "ConditionWords": [
+        "Blend"
+      ],
+      "Candidates": [
+        "Concrete_M0_MI",
+        "Concrete_M0_Bare_MI"
+      ],
+      "TargetMaterial": ""
+    }
+  ],
+  "VariationWords": [
+    "_DarkBlend",
+    "DarkBlend_",
+    "DarkBlend",
+    "_DirtBlend",
+    "DirtBlend_",
+    "DirtBlend",
+    "_BareBlend",
+    "BareBlend_",
+    "BareBlend",
+    "_GrassBlend",
+    "GrassBlend_",
+    "GrassBlend",
+    "_MossBlend",
+    "MossBlend_",
+    "MossBlend",
+    "_MudBlend",
+    "MudBlend_",
+    "MudBlend",
+    "_Blend",
+    "Blend_",
+    "Blend",
+    "_Grass",
+    "Grass_",
+    "Grass",
+    "_Dirt",
+    "Dirt_",
+    "Dirt",
+    "_Sand",
+    "Sand_",
+    "Sand",
+    "_Moss",
+    "Moss_",
+    "Moss",
+    "_Mud",
+    "Mud_",
+    "Mud",
+    "_Water",
+    "Water_",
+    "Water",
+    "_Gravel",
+    "Gravel_",
+    "Gravel"
+  ]
+}
