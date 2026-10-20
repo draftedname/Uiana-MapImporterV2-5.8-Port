@@ -3,6 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Internationalization/Regex.h"
 #include "UianaMaterialRules.h"
 
 DECLARE_LOG_CATEGORY_EXTERN(LogUianaConfig, Log, All);
@@ -49,8 +50,14 @@ private:
 	FUianaConfigManager();
 	bool ValidateRules(FText& OutErrorMessage);
 
+	/** Returns a compiled regex for Pattern, compiling and caching it on first use. Null on invalid pattern. */
+	const FRegexPattern* GetCompiledRegex(const FString& Pattern, bool bCaseSensitive);
+
 	FUianaMaterialRules CurrentRules;
 	bool bIsLoaded = false;
+
+	// Compiled regex cache for EUianaMatchType::Regex rules; cleared on every reload.
+	TMap<FString, TSharedPtr<FRegexPattern>> RegexCache;
 
 	// Runtime match counters for telemetry
 	TMap<FString, int32> RuleMatchCounts;

@@ -11,6 +11,200 @@
 
 DEFINE_LOG_CATEGORY(LogUianaConfig);
 
+namespace
+{
+	const TArray<FString>& GetRootAllowedKeys()
+	{
+		static const TArray<FString> Keys = {
+			TEXT("$schema"),
+			TEXT("SchemaVersion"),
+			TEXT("Flags"),
+			TEXT("ClampVectorParameters"),
+			TEXT("ParameterAliases"),
+			TEXT("SecondaryParameterRoutes"),
+			TEXT("DccPlaceholderPrefixes"),
+			TEXT("ParentRules"),
+			TEXT("SlotOverrides"),
+			TEXT("VariationWords")
+		};
+		return Keys;
+	}
+
+	const TArray<FString>& GetFlagAllowedKeys()
+	{
+		static const TArray<FString> Keys = {
+			TEXT("bEnableHismMixedSlotGuard"),
+			TEXT("bEnableDiffuseVectorClamping"),
+			TEXT("bEnableReferencedTextureFallback"),
+			TEXT("bEnableVariationWordStripping")
+		};
+		return Keys;
+	}
+
+	const TArray<FString>& GetParentRuleAllowedKeys()
+	{
+		static const TArray<FString> Keys = {
+			TEXT("RuleName"),
+			TEXT("Priority"),
+			TEXT("MatchTarget"),
+			TEXT("MatchType"),
+			TEXT("bCaseSensitive"),
+			TEXT("Patterns"),
+			TEXT("ExcludePatterns"),
+			TEXT("TargetParent")
+		};
+		return Keys;
+	}
+
+	const TArray<FString>& GetSlotOverrideAllowedKeys()
+	{
+		static const TArray<FString> Keys = {
+			TEXT("RuleName"),
+			TEXT("Priority"),
+			TEXT("MeshName"),
+			TEXT("SlotIndex"),
+			TEXT("Patterns"),
+			TEXT("ConditionWords"),
+			TEXT("Candidates"),
+			TEXT("TargetMaterial")
+		};
+		return Keys;
+	}
+
+	const TArray<FString>& GetSecondaryRouteAllowedKeys()
+	{
+		static const TArray<FString> Keys = {
+			TEXT("ParentCondition"),
+			TEXT("SourceParamAliases"),
+			TEXT("TargetParam"),
+			TEXT("Type")
+		};
+		return Keys;
+	}
+
+	bool ValidateKeys(const TSharedPtr<FJsonObject>& Object, const TArray<FString>& AllowedKeys, const FString& Context, FText& OutErrorMessage)
+	{
+		for (const TPair<FString, TSharedPtr<FJsonValue>>& Pair : Object->Values)
+		{
+			if (!AllowedKeys.Contains(Pair.Key))
+			{
+				OutErrorMessage = FText::Format(
+					FText::FromString(TEXT("Unknown key '{0}' in {1} of MaterialRules.json (misspelled or unsupported field). Import aborted.")),
+					FText::FromString(Pair.Key), FText::FromString(Context));
+				UE_LOG(LogUianaConfig, Error, TEXT("%s"), *OutErrorMessage.ToString());
+				return false;
+			}
+		}
+		return true;
+	}
+
+	bool ValidateEnumString(const TSharedPtr<FJsonObject>& Object, const TCHAR* FieldName, std::initializer_list<const TCHAR*> AllowedValues, const FString& Context, FText& OutErrorMessage)
+	{
+		FString Value;
+		if (!Object->TryGetStringField(FieldName, Value))
+		{
+			// Missing or non-string values are handled by JsonObjectToUStruct.
+			return true;
+		}
+
+		for (const TCHAR* Allowed : AllowedValues)
+		{
+			if (Value.Equals(Allowed, ESearchCase::CaseSensitive))
+			{
+				return true;
+			}
+		}
+
+		TArray<FString> AllowedList;
+		for (const TCHAR* Allowed : AllowedValues)
+		{
+			AllowedList.Add(Allowed);
+		}
+
+		OutErrorMessage = FText::Format(
+			FText::FromString(TEXT("Unknown {0} value '{1}' in {2} of MaterialRules.json (expected one of: {3}). Import aborted.")),
+			FText::FromString(FieldName), FText::FromString(Value), FText::FromString(Context),
+			FText::FromString(FString::Join(AllowedList, TEXT(", "))));
+		UE_LOG(LogUianaConfig, Error, TEXT("%s"), *OutErrorMessage.ToString());
+		return false;
+	}
+
+	bool ValidateJsonKeys(const TSharedPtr<FJsonObject>& Root, FText& OutErrorMessage)
+	{
+		if (!ValidateKeys(Root, GetRootAllowedKeys(), TEXT("root object"), OutErrorMessage))
+		{
+			return false;
+		}
+
+		const TSharedPtr<FJsonObject>* FlagsObject = nullptr;
+		if (Root->TryGetObjectField(TEXT("Flags"), FlagsObject) && !ValidateKeys(*FlagsObject, GetFlagAllowedKeys(), TEXT("Flags"), OutErrorMessage))
+		{
+			return false;
+		}
+
+		const TArray<TSharedPtr<FJsonValue>>* ParentRules = nullptr;
+		if (Root->TryGetArrayField(TEXT("ParentRules"), ParentRules))
+		{
+			for (int32 Index = 0; Index < ParentRules->Num(); ++Index)
+			{
+				const TSharedPtr<FJsonObject>* RuleObject = nullptr;
+				if (!(*ParentRules)[Index]->TryGetObject(RuleObject))
+				{
+					continue;
+				}
+
+				const FString Context = FString::Printf(TEXT("ParentRules[%d]"), Index);
+				if (!ValidateKeys(*RuleObject, GetParentRuleAllowedKeys(), Context, OutErrorMessage) ||
+					!ValidateEnumString(*RuleObject, TEXT("MatchTarget"), { TEXT("MaterialName"), TEXT("ParentName"), TEXT("PackagePath") }, Context, OutErrorMessage) ||
+					!ValidateEnumString(*RuleObject, TEXT("MatchType"), { TEXT("Exact"), TEXT("Prefix"), TEXT("Contains"), TEXT("Regex") }, Context, OutErrorMessage))
+				{
+					return false;
+				}
+			}
+		}
+
+		const TArray<TSharedPtr<FJsonValue>>* SlotOverrides = nullptr;
+		if (Root->TryGetArrayField(TEXT("SlotOverrides"), SlotOverrides))
+		{
+			for (int32 Index = 0; Index < SlotOverrides->Num(); ++Index)
+			{
+				const TSharedPtr<FJsonObject>* OverrideObject = nullptr;
+				if (!(*SlotOverrides)[Index]->TryGetObject(OverrideObject))
+				{
+					continue;
+				}
+
+				if (!ValidateKeys(*OverrideObject, GetSlotOverrideAllowedKeys(), FString::Printf(TEXT("SlotOverrides[%d]"), Index), OutErrorMessage))
+				{
+					return false;
+				}
+			}
+		}
+
+		const TArray<TSharedPtr<FJsonValue>>* SecondaryRoutes = nullptr;
+		if (Root->TryGetArrayField(TEXT("SecondaryParameterRoutes"), SecondaryRoutes))
+		{
+			for (int32 Index = 0; Index < SecondaryRoutes->Num(); ++Index)
+			{
+				const TSharedPtr<FJsonObject>* RouteObject = nullptr;
+				if (!(*SecondaryRoutes)[Index]->TryGetObject(RouteObject))
+				{
+					continue;
+				}
+
+				const FString Context = FString::Printf(TEXT("SecondaryParameterRoutes[%d]"), Index);
+				if (!ValidateKeys(*RouteObject, GetSecondaryRouteAllowedKeys(), Context, OutErrorMessage) ||
+					!ValidateEnumString(*RouteObject, TEXT("Type"), { TEXT("Texture"), TEXT("Vector") }, Context, OutErrorMessage))
+				{
+					return false;
+				}
+			}
+		}
+
+		return true;
+	}
+}
+
 FUianaConfigManager::FUianaConfigManager()
 {
 }
@@ -35,6 +229,7 @@ bool FUianaConfigManager::LoadRules(FText& OutErrorMessage)
 {
 	bIsLoaded = false;
 	RuleMatchCounts.Empty();
+	RegexCache.Empty();
 
 	TSharedPtr<IPlugin> Plugin = IPluginManager::Get().FindPlugin(TEXT("Uiana"));
 	if (!Plugin.IsValid())
@@ -70,6 +265,11 @@ bool FUianaConfigManager::LoadRules(FText& OutErrorMessage)
 	}
 
 	FUianaMaterialRules ParsedRules;
+	if (!ValidateJsonKeys(JsonObject, OutErrorMessage))
+	{
+		return false;
+	}
+
 	if (!FJsonObjectConverter::JsonObjectToUStruct(JsonObject.ToSharedRef(), &ParsedRules, 0, 0))
 	{
 		OutErrorMessage = FText::FromString(TEXT("Failed to convert MaterialRules.json to FUianaMaterialRules struct. Check field types and naming. Import aborted."));
@@ -113,6 +313,7 @@ bool FUianaConfigManager::ValidateRules(FText& OutErrorMessage)
 	}
 
 	TSet<FString> SeenParentRuleNames;
+	TSet<int32> SeenParentPriorities;
 	for (int32 Idx = 0; Idx < CurrentRules.ParentRules.Num(); ++Idx)
 	{
 		const FUianaParentRule& Rule = CurrentRules.ParentRules[Idx];
@@ -130,6 +331,15 @@ bool FUianaConfigManager::ValidateRules(FText& OutErrorMessage)
 			return false;
 		}
 		SeenParentRuleNames.Add(Rule.RuleName);
+
+		if (SeenParentPriorities.Contains(Rule.Priority))
+		{
+			OutErrorMessage = FText::Format(FText::FromString(TEXT("Duplicate ParentRule Priority {0} at index {1} ('{2}'). Priorities must be unique so evaluation order is deterministic. Import aborted.")),
+				FText::AsNumber(Rule.Priority), FText::AsNumber(Idx), FText::FromString(Rule.RuleName));
+			UE_LOG(LogUianaConfig, Error, TEXT("%s"), *OutErrorMessage.ToString());
+			return false;
+		}
+		SeenParentPriorities.Add(Rule.Priority);
 
 		if (Rule.TargetParent.IsEmpty())
 		{
@@ -152,9 +362,19 @@ bool FUianaConfigManager::ValidateRules(FText& OutErrorMessage)
 	}
 
 	TSet<FString> SeenSlotRuleNames;
+	TSet<int32> SeenSlotPriorities;
 	for (int32 Idx = 0; Idx < CurrentRules.SlotOverrides.Num(); ++Idx)
 	{
 		const FUianaSlotOverride& Override = CurrentRules.SlotOverrides[Idx];
+		if (SeenSlotPriorities.Contains(Override.Priority))
+		{
+			OutErrorMessage = FText::Format(FText::FromString(TEXT("Duplicate SlotOverride Priority {0} at index {1} ('{2}'). Priorities must be unique so evaluation order is deterministic. Import aborted.")),
+				FText::AsNumber(Override.Priority), FText::AsNumber(Idx), FText::FromString(Override.RuleName));
+			UE_LOG(LogUianaConfig, Error, TEXT("%s"), *OutErrorMessage.ToString());
+			return false;
+		}
+		SeenSlotPriorities.Add(Override.Priority);
+
 		if (!Override.RuleName.IsEmpty())
 		{
 			if (SeenSlotRuleNames.Contains(Override.RuleName))
@@ -167,12 +387,46 @@ bool FUianaConfigManager::ValidateRules(FText& OutErrorMessage)
 		}
 	}
 
+	// Aliases are looked up against lowercased parameter names, so non-lowercase keys can never match.
+	for (const TPair<FString, FString>& Alias : CurrentRules.ParameterAliases)
+	{
+		if (!Alias.Key.Equals(Alias.Key.ToLower(), ESearchCase::CaseSensitive))
+		{
+			OutErrorMessage = FText::Format(FText::FromString(TEXT("ParameterAliases key '{0}' must be lowercase (alias keys are matched against lowercased parameter names). Import aborted.")),
+				FText::FromString(Alias.Key));
+			UE_LOG(LogUianaConfig, Error, TEXT("%s"), *OutErrorMessage.ToString());
+			return false;
+		}
+
+		if (Alias.Value.IsEmpty())
+		{
+			OutErrorMessage = FText::Format(FText::FromString(TEXT("ParameterAliases key '{0}' maps to an empty target parameter. Import aborted.")),
+				FText::FromString(Alias.Key));
+			UE_LOG(LogUianaConfig, Error, TEXT("%s"), *OutErrorMessage.ToString());
+			return false;
+		}
+	}
+
 	return true;
 }
 
-FString FUianaConfigManager::ResolveParentMaterial(const FString& MaterialName, const FString& IncomingParentName, const FString& PackagePath)
+const FRegexPattern* FUianaConfigManager::GetCompiledRegex(const FString& Pattern, bool bCaseSensitive)
 {
-	if (!bIsLoaded)
+	const FString CacheKey = FString::Printf(TEXT("%d|%s"), bCaseSensitive ? 1 : 0, *Pattern);
+	if (const TSharedPtr<FRegexPattern>* Cached = RegexCache.Find(CacheKey))
+	{
+		return Cached->Get();
+	}
+
+	TSharedPtr<FRegexPattern> Compiled = MakeShared<FRegexPattern>(
+		Pattern,
+		bCaseSensitive ? ERegexPatternFlags::None : ERegexPatternFlags::CaseInsensitive);
+	RegexCache.Add(CacheKey, Compiled);
+	return Compiled.Get();
+}
+
+FString FUianaConfigManager::ResolveParentMaterial(const FString& MaterialName, const FString& IncomingParentName, const FString& PackagePath)
+{	if (!bIsLoaded)
 	{
 		return IncomingParentName.IsEmpty() ? TEXT("/Uiana/Materials/BaseEnv_MAT_V4.BaseEnv_MAT_V4") : IncomingParentName;
 	}
@@ -227,8 +481,11 @@ FString FUianaConfigManager::ResolveParentMaterial(const FString& MaterialName, 
 				bMatched = TargetString.Contains(Pat, CaseOption) || PackagePath.Contains(Pat, CaseOption);
 				break;
 			case EUianaMatchType::Regex:
-				// Fallback to Contains if regex not compiled
-				bMatched = TargetString.Contains(Pat, CaseOption);
+				if (const FRegexPattern* Compiling = GetCompiledRegex(Pat, Rule.bCaseSensitive))
+				{
+					FRegexMatcher Matcher(*Compiling, TargetString);
+					bMatched = Matcher.FindNext();
+				}
 				break;
 			}
 

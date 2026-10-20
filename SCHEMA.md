@@ -8,8 +8,8 @@ Prior to this refactor, material parent mappings, slot overrides, parameter alia
 
 The data-driven material rules engine externalizes these behaviors into `Config/MaterialRules.json`. The design principles are:
 - **Hot-Reloadable**: The JSON is reloaded at the start of every import (via `FUianaConfigManager::Get().LoadRules()`), allowing rapid iterative tuning without recompiling C++.
-- **Fail-Fast**: If `MaterialRules.json` is missing or malformed, or if any target master material does not exist, the import aborts immediately with an actionable error dialog and log.
-- **Flexible and Extensible**: The JSON structure is not rigidly locked. Optional fields have safe defaults. Future maps or specialized material behaviors can add new properties or rule types without breaking backward compatibility.
+- **Fail-Fast**: If `MaterialRules.json` is missing or malformed, contains unknown keys, duplicate rule names/priorities, a misspelled enum value, or any target master material that does not exist, the import aborts immediately with an actionable error dialog and log entry naming the offending rule/index.
+- **Flexible and Extensible**: Optional fields have safe defaults, so adding a field is additive for authors. Unknown keys are rejected on load (see [Load-Time Validation](#load-time-validation)); extending the schema therefore means adding the field to the C++ struct and to the whitelist in `UianaConfigManager.cpp` first, which prevents silent typos from disabling a rule.
 - **Priority-Driven**: Rules have explicit integer priorities (lower number = higher priority), ensuring deterministic evaluation order.
 
 ---
@@ -47,6 +47,22 @@ A valid `MaterialRules.json` contains a single JSON object with the following to
 | `ParentRules` | Array[Object] | Yes | Ordered rules for resolving master parent materials. |
 | `SlotOverrides` | Array[Object] | Yes | Ordered rules for resolving static mesh material slots. |
 | `VariationWords` | Array[String] | Yes | Substrings stripped from material names during variant resolution. |
+
+### Load-Time Validation
+
+Every import reloads the file (`FUianaConfigManager::LoadRules`) and aborts before touching any asset when a check fails. Log lines use `LogUianaConfig: Error` and include the rule name or array index.
+
+| Check | Behavior |
+|---|---|
+| JSON syntax | Malformed JSON aborts with the parser error. |
+| Unknown keys | Any key not in the documented schema is rejected, at the root, in `Flags`, and inside every `ParentRules`, `SlotOverrides`, and `SecondaryParameterRoutes` element. Catches misspellings such as `Priorityy` or `Pattern`. |
+| Enum spelling | `MatchTarget` must be `MaterialName`, `ParentName`, or `PackagePath`; `MatchType` must be `Exact`, `Prefix`, `Contains`, or `Regex`; route `Type` must be `Texture` or `Vector`. Values are case-sensitive. |
+| Rule names | `ParentRules[].RuleName` is required and unique; non-empty `SlotOverrides[].RuleName` values must be unique. |
+| Priorities | `Priority` must be unique within `ParentRules` and within `SlotOverrides`, so evaluation order is deterministic rather than depending on the sort implementation. |
+| Master materials | A static `TargetParent` under `/Uiana/Materials/` (no `{MaterialName}` placeholder) must load via `StaticLoadObject`. |
+| Aliases | `ParameterAliases` keys must already be lowercase (they are matched against lowercased parameter names) and must not map to an empty target. |
+
+Regex notes: `MatchType: "Regex"` uses ICU syntax (`FRegexPattern`) and searches anywhere in the match-target string, exactly like `Contains`. `bCaseSensitive: false` compiles the pattern with `ERegexPatternFlags::CaseInsensitive`. Compiled patterns are cached per load; the cache is cleared on reload.
 
 ---
 
@@ -168,7 +184,7 @@ List of lowercase parameter names that should have RGB values clamped to `[0.0, 
 | Field | Type | Description |
 |---|---|---|
 | `RuleName` | String | Unique identifier for telemetry and error reporting. |
-| `Priority` | Integer | Evaluation priority (lower number evaluated first; e.g. 10 before 50). |
+| `Priority` | Integer | Evaluation priority (lower number evaluated first; e.g. 10 before 50). Must be unique within `ParentRules`. |
 | `MatchTarget` | String | Attribute to match against: `"MaterialName"`, `"ParentName"`, or `"PackagePath"`. |
 | `MatchType` | String | Match algorithm: `"Exact"`, `"Prefix"`, `"Contains"`, or `"Regex"`. |
 | `bCaseSensitive` | Boolean | Whether string comparisons are case-sensitive. |
@@ -225,7 +241,7 @@ List of lowercase parameter names that should have RGB values clamped to `[0.0, 
 | Field | Type | Description |
 |---|---|---|
 | `RuleName` | String | Unique identifier for telemetry and logging. |
-| `Priority` | Integer | Evaluation order (ascending). |
+| `Priority` | Integer | Evaluation order (ascending). Must be unique within `SlotOverrides`. |
 | `MeshName` | String | Target mesh name (e.g. `"MidFloor_1"`), or empty for any mesh. |
 | `SlotIndex` | Integer | Target slot index (e.g. `0`), or `-1` for any slot. |
 | `Patterns` | Array[String] | Substrings that must be present in the incoming material name. |
