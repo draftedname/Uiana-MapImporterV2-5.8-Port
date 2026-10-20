@@ -186,7 +186,7 @@ UStaticMesh* UEFModelFactory::CreateStaticMesh(TArray<FLODData>& LODData, UObjec
 		SourceModel.BuildSettings.DstLightmapIndex = 1;
 		SourceModel.BuildSettings.MinLightmapResolution = 64;
 	}
-	StaticMesh->SetLightMapCoordinateIndex(1);
+	StaticMesh->SetLightMapCoordinateIndex(bHasLightmapUV ? 1 : 0);
 	StaticMesh->SetLightMapResolution(64);
 	StaticMesh->Modify();
 	
