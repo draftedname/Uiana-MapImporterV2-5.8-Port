@@ -348,12 +348,35 @@ void UBPFL::ImportMeshes(TArray<FString> AllMeshesPath, FString ObjectsPath)
 											bNeedsSave = true;
 										}
 									}
+									int32 NumUVs = 0;
+									if (StaticMesh->GetRenderData() && StaticMesh->GetRenderData()->LODResources.IsValidIndex(0))
+									{
+										NumUVs = StaticMesh->GetRenderData()->LODResources[0].VertexBuffers.StaticMeshVertexBuffer.GetNumTexCoords();
+									}
+									if (NumUVs <= 0)
+									{
+										NumUVs = StaticMesh->GetNumUVChannels(0);
+									}
+
 									int32 LMCoord = 1;
 									if ((*Props)->TryGetNumberField(TEXT("LightMapCoordinateIndex"), LMCoord))
 									{
+										if (NumUVs > 0 && LMCoord >= NumUVs)
+										{
+											LMCoord = (NumUVs > 1) ? 1 : 0;
+										}
 										if (StaticMesh->GetLightMapCoordinateIndex() != LMCoord)
 										{
 											StaticMesh->SetLightMapCoordinateIndex(LMCoord);
+											bNeedsSave = true;
+										}
+									}
+									else
+									{
+										int32 SafeCoord = (NumUVs > 1) ? 1 : 0;
+										if (StaticMesh->GetLightMapCoordinateIndex() != SafeCoord)
+										{
+											StaticMesh->SetLightMapCoordinateIndex(SafeCoord);
 											bNeedsSave = true;
 										}
 									}
@@ -466,9 +489,20 @@ void UBPFL::ImportMeshes(TArray<FString> AllMeshesPath, FString ObjectsPath)
 			}
 			else
 			{
-				if (StaticMesh->GetLightMapCoordinateIndex() == 0)
+				int32 NumUVs = 0;
+				if (StaticMesh->GetRenderData() && StaticMesh->GetRenderData()->LODResources.IsValidIndex(0))
 				{
-					StaticMesh->SetLightMapCoordinateIndex(1);
+					NumUVs = StaticMesh->GetRenderData()->LODResources[0].VertexBuffers.StaticMeshVertexBuffer.GetNumTexCoords();
+				}
+				if (NumUVs <= 0)
+				{
+					NumUVs = StaticMesh->GetNumUVChannels(0);
+				}
+
+				int32 SafeCoord = (NumUVs > 1) ? 1 : 0;
+				if (StaticMesh->GetLightMapCoordinateIndex() != SafeCoord)
+				{
+					StaticMesh->SetLightMapCoordinateIndex(SafeCoord);
 					bNeedsSave = true;
 				}
 				if (StaticMesh->GetLightMapResolution() <= 4)

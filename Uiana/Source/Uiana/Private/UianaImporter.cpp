@@ -13,6 +13,7 @@
 #include "Components/SpotLightComponent.h"
 #include "Components/RectLightComponent.h"
 #include "Components/SkyLightComponent.h"
+#include "Components/SkyAtmosphereComponent.h"
 #include "Components/DirectionalLightComponent.h"
 #include "Components/LightComponentBase.h"
 #include "Engine/DecalActor.h"
@@ -1402,11 +1403,46 @@ namespace
 					Actor->HismComponent->SetStaticMesh(LoadedMesh);
 					Actor->HismComponent->SetMobility(EComponentMobility::Static);
 
+					if (LoadedMesh)
+					{
+						int32 NumUVs = 0;
+						if (LoadedMesh->GetRenderData() && LoadedMesh->GetRenderData()->LODResources.IsValidIndex(0))
+						{
+							NumUVs = LoadedMesh->GetRenderData()->LODResources[0].VertexBuffers.StaticMeshVertexBuffer.GetNumTexCoords();
+						}
+						if (NumUVs <= 0)
+						{
+							NumUVs = LoadedMesh->GetNumUVChannels(0);
+						}
+
+						if (NumUVs > 0)
+						{
+							if (LoadedMesh->GetLightMapCoordinateIndex() >= NumUVs)
+							{
+								LoadedMesh->SetLightMapCoordinateIndex((NumUVs > 1) ? 1 : 0);
+								LoadedMesh->MarkPackageDirty();
+							}
+							if (LoadedMesh->GetLightMapResolution() <= 0)
+							{
+								LoadedMesh->SetLightMapResolution(64);
+								LoadedMesh->MarkPackageDirty();
+							}
+						}
+						else
+						{
+							Actor->HismComponent->SetMobility(EComponentMobility::Movable);
+						}
+					}
+
 					int32 OverriddenHismRes = 0;
 					if ((*Props)->TryGetNumberField(TEXT("OverriddenLightMapRes"), OverriddenHismRes) && OverriddenHismRes > 0)
 					{
-						Actor->HismComponent->OverriddenLightMapRes = FMath::RoundToInt(OverriddenHismRes * Config.LightmapResolutionMultiplier);
-						Actor->HismComponent->bOverrideLightMapRes = true;
+						int32 ScaledRes = FMath::RoundToInt(OverriddenHismRes * Config.LightmapResolutionMultiplier);
+						if (ScaledRes > 0 && Actor->HismComponent->HasLightmapTextureCoordinates())
+						{
+							Actor->HismComponent->OverriddenLightMapRes = ScaledRes;
+							Actor->HismComponent->bOverrideLightMapRes = true;
+						}
 					}
 
 					const TArray<TSharedPtr<FJsonValue>>* Instances = nullptr;
@@ -1480,11 +1516,46 @@ namespace
 					SMC->SetStaticMesh(LoadedMesh);
 					SMC->SetMobility(EComponentMobility::Static);
 
+					if (LoadedMesh)
+					{
+						int32 NumUVs = 0;
+						if (LoadedMesh->GetRenderData() && LoadedMesh->GetRenderData()->LODResources.IsValidIndex(0))
+						{
+							NumUVs = LoadedMesh->GetRenderData()->LODResources[0].VertexBuffers.StaticMeshVertexBuffer.GetNumTexCoords();
+						}
+						if (NumUVs <= 0)
+						{
+							NumUVs = LoadedMesh->GetNumUVChannels(0);
+						}
+
+						if (NumUVs > 0)
+						{
+							if (LoadedMesh->GetLightMapCoordinateIndex() >= NumUVs)
+							{
+								LoadedMesh->SetLightMapCoordinateIndex((NumUVs > 1) ? 1 : 0);
+								LoadedMesh->MarkPackageDirty();
+							}
+							if (LoadedMesh->GetLightMapResolution() <= 0)
+							{
+								LoadedMesh->SetLightMapResolution(64);
+								LoadedMesh->MarkPackageDirty();
+							}
+						}
+						else
+						{
+							SMC->SetMobility(EComponentMobility::Movable);
+						}
+					}
+
 					int32 OverriddenRes = 0;
 					if ((*Props)->TryGetNumberField(TEXT("OverriddenLightMapRes"), OverriddenRes) && OverriddenRes > 0)
 					{
-						SMC->OverriddenLightMapRes = FMath::RoundToInt(OverriddenRes * Config.LightmapResolutionMultiplier);
-						SMC->bOverrideLightMapRes = true;
+						int32 ScaledRes = FMath::RoundToInt(OverriddenRes * Config.LightmapResolutionMultiplier);
+						if (ScaledRes > 0 && SMC->HasLightmapTextureCoordinates())
+						{
+							SMC->OverriddenLightMapRes = ScaledRes;
+							SMC->bOverrideLightMapRes = true;
+						}
 					}
 
 					ApplyActorMaterials(SMC);
@@ -1680,16 +1751,8 @@ namespace
 						{
 							SkyComp->SetMobility(EComponentMobility::Movable);
 							SkyComp->bRealTimeCapture = false;
-							float IntensityVal = 1.8f;
-							if ((*Props)->TryGetNumberField(TEXT("Intensity"), IntensityVal) && IntensityVal > 0.0f)
-							{
-								if (IntensityVal > 100.0f)
-								{
-									IntensityVal /= 1000.0f;
-								}
-								IntensityVal = FMath::Clamp(IntensityVal, 1.2f, 2.5f);
-							}
-							SkyComp->SetIntensity(IntensityVal);
+							SkyComp->SetIntensity(2.0f);
+							SkyComp->SkyDistanceThreshold = 24000.0f;
 							SkyComp->IndirectLightingIntensity = 1.0f;
 							const TSharedPtr<FJsonObject>* ColorObj = nullptr;
 							if ((*Props)->TryGetObjectField(TEXT("LightColor"), ColorObj) && ColorObj && (*ColorObj).IsValid())
@@ -2202,6 +2265,31 @@ namespace
 								}
 							}
 						}
+
+						int32 NumUVs = 0;
+						if (SM->GetRenderData() && SM->GetRenderData()->LODResources.IsValidIndex(0))
+						{
+							NumUVs = SM->GetRenderData()->LODResources[0].VertexBuffers.StaticMeshVertexBuffer.GetNumTexCoords();
+						}
+						if (NumUVs <= 0)
+						{
+							NumUVs = SM->GetNumUVChannels(0);
+						}
+
+						if (NumUVs > 0)
+						{
+							if (SM->GetLightMapCoordinateIndex() >= NumUVs)
+							{
+								SM->SetLightMapCoordinateIndex((NumUVs > 1) ? 1 : 0);
+								bMeshModified = true;
+							}
+							if (SM->GetLightMapResolution() <= 0)
+							{
+								SM->SetLightMapResolution(64);
+								bMeshModified = true;
+							}
+						}
+
 						if (bMeshModified)
 						{
 							SM->MarkPackageDirty();
@@ -2257,6 +2345,50 @@ namespace
 						PPV->Settings.IndirectLightingIntensity = 1.0f;
 						PPV->Settings.bOverride_IndirectLightingColor = true;
 						PPV->Settings.IndirectLightingColor = FLinearColor(1.0f, 0.956f, 0.88f, 1.0f);
+					}
+				}
+
+				ASkyLight* SkyL = nullptr;
+				for (TActorIterator<ASkyLight> It(World); It; ++It)
+				{
+					SkyL = *It;
+					break;
+				}
+				if (!SkyL)
+				{
+					SkyL = World->SpawnActor<ASkyLight>(ASkyLight::StaticClass());
+					if (SkyL)
+					{
+						SkyL->SetActorLabel(TEXT("Valorant_SkyLight"));
+						SkyL->SetFolderPath(TEXT("Lights"));
+					}
+				}
+				if (SkyL)
+				{
+					if (USkyLightComponent* SkyComp = SkyL->GetLightComponent())
+					{
+						SkyComp->SetMobility(EComponentMobility::Movable);
+						SkyComp->bRealTimeCapture = false;
+						SkyComp->SetIntensity(2.0f);
+						SkyComp->SkyDistanceThreshold = 24000.0f;
+						SkyComp->IndirectLightingIntensity = 1.0f;
+						SkyComp->MarkRenderStateDirty();
+					}
+				}
+
+				bool bHasSkyAtmosphere = false;
+				for (TActorIterator<ASkyAtmosphere> It(World); It; ++It)
+				{
+					bHasSkyAtmosphere = true;
+					break;
+				}
+				if (!bHasSkyAtmosphere)
+				{
+					ASkyAtmosphere* SkyAtmo = World->SpawnActor<ASkyAtmosphere>(ASkyAtmosphere::StaticClass());
+					if (SkyAtmo)
+					{
+						SkyAtmo->SetActorLabel(TEXT("Valorant_SkyAtmosphere"));
+						SkyAtmo->SetFolderPath(TEXT("Lights"));
 					}
 				}
 			}
