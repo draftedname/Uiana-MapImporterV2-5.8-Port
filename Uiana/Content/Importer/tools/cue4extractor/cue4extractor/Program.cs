@@ -134,12 +134,17 @@ namespace cue4extractor
                         var noExt = loadPath.SubstringBeforeLast('.');
                         if (noExt == loadPath || !provider.TryLoadPackage(noExt, out pkg))
                         {
+                            Console.WriteLine($"DEBUG SKIP (TryLoadPackage failed): loadPath='{loadPath}'");
                             skipped++;
                             continue;
                         }
                     }
 
                     var exports = pkg.GetExports();
+                    if (!exports.Any())
+                    {
+                        Console.WriteLine($"DEBUG SKIP (exports.Count == 0): loadPath='{loadPath}'");
+                    }
                     foreach (var exp in exports)
                     {
                         try
@@ -149,6 +154,7 @@ namespace cue4extractor
                                 using var dto = new StaticMeshDto(staticMesh, meshOptions.MeshQuality, meshOptions.NaniteMeshFormat);
                                 if (dto.LODs.Count == 0)
                                 {
+                                    Console.WriteLine($"DEBUG SKIP (dto.LODs.Count == 0): {staticMesh.Name}");
                                     skipped++;
                                     continue;
                                 }
@@ -169,6 +175,7 @@ namespace cue4extractor
                                 using var dto = new SkeletalMeshDto(skeletalMesh, meshOptions.MeshQuality, meshOptions.NaniteMeshFormat);
                                 if (dto.LODs.Count == 0)
                                 {
+                                    Console.WriteLine($"DEBUG SKIP (skeletal dto.LODs.Count == 0): {skeletalMesh.Name}");
                                     skipped++;
                                     continue;
                                 }
@@ -189,9 +196,9 @@ namespace cue4extractor
                                 try
                                 {
                                     var decoded = tex.Decode(ETexturePlatform.DesktopMobile);
-                                    if (decoded == null) { skipped++; continue; }
+                                    if (decoded == null) { Console.WriteLine($"DEBUG SKIP (decoded == null): {tex.Name}"); skipped++; continue; }
                                     var pngBytes = decoded.Encode(ETextureFormat.Png, false, out var ext);
-                                    if (pngBytes == null || pngBytes.Length == 0) { skipped++; continue; }
+                                    if (pngBytes == null || pngBytes.Length == 0) { Console.WriteLine($"DEBUG SKIP (pngBytes == null): {tex.Name}"); skipped++; continue; }
                                     var exportPath = (exp.Owner?.Name ?? exp.GetPathName()).SubstringBeforeLast('.');
                                     exportPath = ToExportPath(exportPath) + "." + ext;
                                     var outPath = Path.Combine(baseDir.FullName, exportPath);
@@ -200,20 +207,27 @@ namespace cue4extractor
                                     File.WriteAllBytes(outPath, pngBytes);
                                     count++;
                                 }
-                                catch
+                                catch (Exception exTex)
                                 {
+                                    Console.WriteLine($"DEBUG SKIP (tex decode exception): {tex.Name}: {exTex.Message}");
                                     skipped++;
                                 }
                             }
+                            else
+                            {
+                                Console.WriteLine($"DEBUG SKIP (unknown export type): {exp.GetType().FullName} ({exp.Name})");
+                            }
                         }
-                        catch (Exception)
+                        catch (Exception exExp)
                         {
+                            Console.WriteLine($"DEBUG SKIP (exp loop exception): {exExp.Message}");
                             skipped++;
                         }
                     }
                 }
-                catch (Exception)
+                catch (Exception exPkg)
                 {
+                    Console.WriteLine($"DEBUG SKIP (pkg load exception): {exPkg.Message}");
                     skipped++;
                 }
             }
