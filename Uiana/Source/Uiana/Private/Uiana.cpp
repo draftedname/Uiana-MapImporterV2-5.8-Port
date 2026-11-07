@@ -9,6 +9,7 @@
 #include "LevelEditor.h"
 #include "Widgets/Docking/SDockTab.h"
 #include "Widgets/Layout/SBox.h"
+#include "Widgets/Layout/SScrollBox.h"
 #include "Widgets/Text/STextBlock.h"
 #include "Widgets/Input/SMultiLineEditableTextBox.h"
 #include "ToolMenus.h"
@@ -78,8 +79,12 @@ void FUianaModule::PluginButtonClicked()
 
 FReply FUianaModule::ExecuteFunction()
 {
-	Stun->SaveConfig();
-	FUianaImporter::Run(*Stun);
+	if (Stun)
+	{
+		Stun->SaveCurrentPresetForMap(Stun->Map);
+		Stun->SaveConfig();
+		FUianaImporter::Run(*Stun);
+	}
 	return FReply::Handled();
 }
 
@@ -113,6 +118,8 @@ TSharedRef<SWidget> FUianaModule::MakeDataManagementSettingsDetailsWidget() cons
 {
 	UUianaDataSettings* Settings = GetMutableDefault<UUianaDataSettings>();
 	Settings->LoadConfig();
+	Settings->InitializeDefaultPresets();
+	Settings->LoadPresetForMap(Settings->Map);
 	Stun = Settings;
 	FPropertyEditorModule& PropertyEditorModule = FModuleManager::Get().LoadModuleChecked<FPropertyEditorModule>("PropertyEditor");
 	FDetailsViewArgs DetailsViewArgs;
@@ -123,13 +130,33 @@ TSharedRef<SWidget> FUianaModule::MakeDataManagementSettingsDetailsWidget() cons
 	DetailsViewArgs.bHideSelectionTip = true;
 	DetailsViewArgs.bShowScrollBar = false;
 	TSharedRef<IDetailsView> Details = PropertyEditorModule.CreateDetailView(DetailsViewArgs);
-	PropertyEditorModule.CreatePropertyTable();
 	Details->SetObject(Settings);
 	Details->SetEnabled(true);
-	Details->OnFinishedChangingProperties().AddLambda([](const FPropertyChangedEvent& Event) {
+	Details->OnFinishedChangingProperties().AddLambda([DetailsWeak = TWeakPtr<IDetailsView>(Details)](const FPropertyChangedEvent& Event) {
 		if (UUianaDataSettings* SettingsObj = GetMutableDefault<UUianaDataSettings>())
 		{
-			SettingsObj->SaveConfig();
+			const FName PropName = (Event.Property != nullptr) ? Event.Property->GetFName() : NAME_None;
+			const FName MemberPropName = (Event.MemberProperty != nullptr) ? Event.MemberProperty->GetFName() : NAME_None;
+
+			if (PropName == GET_MEMBER_NAME_CHECKED(UUianaDataSettings, Map) || MemberPropName == GET_MEMBER_NAME_CHECKED(UUianaDataSettings, Map))
+			{
+				SettingsObj->LoadPresetForMap(SettingsObj->Map);
+				SettingsObj->SaveConfig();
+				if (DetailsWeak.IsValid())
+				{
+					DetailsWeak.Pin()->ForceRefresh();
+				}
+			}
+			else if (PropName == GET_MEMBER_NAME_CHECKED(UUianaDataSettings, MapPresets) || MemberPropName == GET_MEMBER_NAME_CHECKED(UUianaDataSettings, MapPresets))
+			{
+				SettingsObj->LoadPresetForMap(SettingsObj->Map);
+				SettingsObj->SaveConfig();
+			}
+			else
+			{
+				SettingsObj->SaveCurrentPresetForMap(SettingsObj->Map);
+				SettingsObj->SaveConfig();
+			}
 		}
 	});
 
@@ -138,95 +165,78 @@ TSharedRef<SWidget> FUianaModule::MakeDataManagementSettingsDetailsWidget() cons
 
 TSharedRef<class SDockTab> FUianaModule::OnSpawnPluginTab(const FSpawnTabArgs& SpawnTabArgs)
 {
-	FText WidgetText = FText::Format(
-		LOCTEXT("WindowWidgetText", "Add code to {0} in {1} to override this window's contents"),
-		FText::FromString(TEXT("FPLUGIN_NAMEModule::OnSpawnPluginTab")),
-		FText::FromString(TEXT("PLUGIN_NAME.cpp"))
-	);
+	static const FSlateColorBrush BackgroundBrush(FColor(5, 5, 5));
 	return SNew(SDockTab)
 		.TabRole(ETabRole::NomadTab)
 		[
-			// Put your tab content here!
 			SNew(SBorder)
-			.BorderImage(new FSlateColorBrush(FColor(5, 5, 5)))
-		[
-			SNew(SVerticalBox)
-
-			+ SVerticalBox::Slot()
-		.AutoHeight()
-		.Padding(8.f, 5.f, 8.f, 0.f)
-		.HAlign(HAlign_Fill)
-		.VAlign(VAlign_Fill)
-		[
-			SNew(SBorder)
-			.BorderImage(FAppStyle::Get().GetBrush("ToolPanel.DarkGroupBorder"))
-		[
-			SNew(SVerticalBox)
-
-			+ SVerticalBox::Slot()
-		.AutoHeight()
-		.Padding(1.f, 1.f, 0.f, 0.f)
-		.HAlign(HAlign_Left)
-		.VAlign(VAlign_Top)
-
-
-
-
-
-
-		+SVerticalBox::Slot()
-		.AutoHeight()
-		.VAlign(VAlign_Bottom)
-		[
-			MakeDataManagementSettingsDetailsWidget()
-		]
-
-	+ SVerticalBox::Slot()
-		.AutoHeight()
-		.VAlign(VAlign_Bottom)
-		.HAlign(HAlign_Right)
-		.Padding(2.f, 5.f)
-		[
-			SNew(SHorizontalBox)
-			+ SHorizontalBox::Slot()
-			.AutoWidth()
-			.Padding(0.f, 0.f, 8.f, 0.f)
+			.BorderImage(&BackgroundBrush)
 			[
-				SNew(SButton)
-				.ButtonStyle(FAppStyle::Get(), "FlatButton.Default")
-				.ForegroundColor(FSlateColor::UseForeground())
-				.OnClicked_Lambda([this]() -> FReply {
-					if (Stun)
-					{
-						Stun->RefreshMaps();
-					}
-					return FReply::Handled();
-				})
+				SNew(SVerticalBox)
+
+				// Scrollable Settings Area
+				+ SVerticalBox::Slot()
+				.FillHeight(1.0f)
+				.Padding(8.f, 5.f, 8.f, 4.f)
 				[
-					SNew(STextBlock)
-					.Justification(ETextJustify::Center)
-					.TextStyle(FAppStyle::Get(), "NormalText")
-					.Text(FText::FromString(TEXT("Scan / Refresh Maps")))
+					SNew(SBorder)
+					.BorderImage(FAppStyle::Get().GetBrush("ToolPanel.DarkGroupBorder"))
+					[
+						SNew(SScrollBox)
+						.Orientation(Orient_Vertical)
+						+ SScrollBox::Slot()
+						.Padding(4.f)
+						[
+							MakeDataManagementSettingsDetailsWidget()
+						]
+					]
+				]
+
+				// Action Buttons pinned at bottom
+				+ SVerticalBox::Slot()
+				.AutoHeight()
+				.VAlign(VAlign_Bottom)
+				.HAlign(HAlign_Right)
+				.Padding(8.f, 4.f, 8.f, 8.f)
+				[
+					SNew(SHorizontalBox)
+					+ SHorizontalBox::Slot()
+					.AutoWidth()
+					.Padding(0.f, 0.f, 8.f, 0.f)
+					[
+						SNew(SButton)
+						.ButtonStyle(FAppStyle::Get(), "FlatButton.Default")
+						.ForegroundColor(FSlateColor::UseForeground())
+						.OnClicked_Lambda([this]() -> FReply {
+							if (Stun)
+							{
+								Stun->RefreshMaps();
+							}
+							return FReply::Handled();
+						})
+						[
+							SNew(STextBlock)
+							.Justification(ETextJustify::Center)
+							.TextStyle(FAppStyle::Get(), "NormalText")
+							.Text(FText::FromString(TEXT("Scan / Refresh Maps")))
+						]
+					]
+					+ SHorizontalBox::Slot()
+					.AutoWidth()
+					[
+						SNew(SButton)
+						.ButtonStyle(FAppStyle::Get(), "FlatButton.Success")
+						.ForegroundColor(FSlateColor::UseForeground())
+						.OnClicked(FOnClicked::CreateRaw(this, &FUianaModule::ExecuteFunction))
+						[
+							SNew(STextBlock)
+							.Justification(ETextJustify::Center)
+							.TextStyle(FAppStyle::Get(), "NormalText.Important")
+							.Text(NSLOCTEXT("LevelSnapshots", "NotificationFormatText_CreationForm_CreateSnapshotButton", "Generate Map"))
+						]
+					]
 				]
 			]
-			+ SHorizontalBox::Slot()
-			.AutoWidth()
-			[
-				SNew(SButton)
-				.ButtonStyle(FAppStyle::Get(), "FlatButton.Success")
-				.ForegroundColor(FSlateColor::UseForeground())
-				.OnClicked(FOnClicked::CreateRaw(this, &FUianaModule::ExecuteFunction))
-				[
-					SNew(STextBlock)
-					.Justification(ETextJustify::Center)
-					.TextStyle(FAppStyle::Get(), "NormalText.Important")
-					.Text(NSLOCTEXT("LevelSnapshots", "NotificationFormatText_CreationForm_CreateSnapshotButton", "Generate Map"))
-				]
-			]
-		]
-		]
-		]
-		]
 		];
 }
 

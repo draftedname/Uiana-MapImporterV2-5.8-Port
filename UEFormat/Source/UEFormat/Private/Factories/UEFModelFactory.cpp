@@ -7,6 +7,7 @@
 #include "SkeletalMeshAttributes.h"
 #include "StaticToSkeletalMeshConverter.h"
 #include "Engine/SkeletalMeshSocket.h"
+#include "PhysicsEngine/BodySetup.h"
 
 class IMeshUtilities;
 
@@ -188,6 +189,12 @@ UStaticMesh* UEFModelFactory::CreateStaticMesh(TArray<FLODData>& LODData, UObjec
 	}
 	StaticMesh->SetLightMapCoordinateIndex(bHasLightmapUV ? 1 : 0);
 	StaticMesh->SetLightMapResolution(64);
+
+	StaticMesh->CreateBodySetup();
+	if (UBodySetup* BodySetup = StaticMesh->GetBodySetup())
+	{
+		BodySetup->CollisionTraceFlag = ECollisionTraceFlag::CTF_UseComplexAsSimple;
+	}
 	StaticMesh->Modify();
 	
 	return StaticMesh;

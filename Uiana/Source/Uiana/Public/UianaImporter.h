@@ -23,21 +23,28 @@ struct FUianaImportConfig
 	};
 	bool bImportBlueprints = true;
 	bool bImportLights = true;
+	bool bSpawnDefaultSunAndSky = true;
+	float UnitlessIntensityScale = 0.1f;
+	bool bHonorJsonMobility = true;
+	bool bSpawnSkyAtmosphere = false;
+	bool bImportFog = true;
 	bool bImportMeshes = true;
 	bool bFilterMeshes = true;
 	TArray<FString> MeshFilterPrefixes = {
 		TEXT("Floater_"),
 		TEXT("Wires_"),
 		TEXT("Cloth_"),
-		TEXT("BWall_"),
-		TEXT("Plant_0_GroundLeavesC_"),
-		TEXT("Plant_0_GroundLeavesB_"),
-		TEXT("Plant_0_GroundLeavesA_"),
 		TEXT("Papers_"),
-		TEXT("Gravel_"),
-		TEXT("Rock_"),
-		TEXT("Brick_"),
-		TEXT("Shell_4_Asylum")
+		TEXT("Gravel_")
+	};
+	bool bMakeMeshesInvisible = true;
+	TArray<FString> InvisibleMeshPrefixes = {
+		TEXT("SuperGrid_"),
+		TEXT("BP_"),
+		TEXT("Box_For_Volumes"),
+		TEXT("Cylinder_For_Volumes"),
+		TEXT("Slope_For_Volumes"),
+		TEXT("Box_6_")
 	};
 	bool bImportMaterials = true;
 	bool bImportSublevels = true;

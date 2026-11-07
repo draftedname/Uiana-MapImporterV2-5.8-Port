@@ -37,6 +37,9 @@ public:
 	/** Check if vector parameter should be clamped to [0.0, 1.0] */
 	bool ShouldClampVectorParameter(const FString& RawParamName) const;
 
+	/** Check if parameter is deliberately ignored (e.g. low-LOD streaming variants, debug pins) */
+	bool IsParameterIgnored(const FString& RawParamName) const;
+
 	/** Check if slot name is a DCC placeholder (lambert, phong, etc.) */
 	bool IsDccPlaceholderSlotName(const FString& SlotName) const;
 

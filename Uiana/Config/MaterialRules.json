@@ -15,6 +15,34 @@
     "layer a tint",
     "layer b tint"
   ],
+  "IgnoredParameters": [
+    "diffuse b low",
+    "diffuse low",
+    "texture b low",
+    "texture low",
+    "weightmap",
+    "preintegratedskin",
+    "debuggrid",
+    "debuggridtexture",
+    "debugnormal",
+    "debugdiffuse",
+    "debugmra",
+    "debugemissive",
+    "editorgridmaterialtexture",
+    "editorbrushmaterialtexture",
+    "gridtexture",
+    "defaultnormal",
+    "defaultdiffuse",
+    "defaultmra",
+    "previewmaterialtexture",
+    "thumbnailtexture",
+    "scenetexture",
+    "postprocessinput0",
+    "postprocessinput1",
+    "postprocessinput2",
+    "postprocessinput3",
+    "postprocessinput4"
+  ],
   "ParameterAliases": {
     "materialtexture": "diffuse",
     "diffusetex": "diffuse",
@@ -52,6 +80,46 @@
       ],
       "TargetParam": "color mult",
       "Type": "Vector"
+    },
+    {
+      "ParentCondition": "",
+      "SourceParamAliases": [
+        "texture rgb"
+      ],
+      "TargetParam": "diffuse a",
+      "Type": "Texture"
+    },
+    {
+      "ParentCondition": "",
+      "SourceParamAliases": [
+        "normal a"
+      ],
+      "TargetParam": "texture a normal",
+      "Type": "Texture"
+    },
+    {
+      "ParentCondition": "",
+      "SourceParamAliases": [
+        "normal b"
+      ],
+      "TargetParam": "texture b normal",
+      "Type": "Texture"
+    },
+    {
+      "ParentCondition": "",
+      "SourceParamAliases": [
+        "texture a"
+      ],
+      "TargetParam": "diffuse a",
+      "Type": "Texture"
+    },
+    {
+      "ParentCondition": "",
+      "SourceParamAliases": [
+        "texture b"
+      ],
+      "TargetParam": "diffuse b",
+      "Type": "Texture"
     }
   ],
   "DccPlaceholderPrefixes": [

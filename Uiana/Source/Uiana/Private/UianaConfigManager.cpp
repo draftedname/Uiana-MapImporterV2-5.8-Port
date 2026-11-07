@@ -20,6 +20,7 @@ namespace
 			TEXT("SchemaVersion"),
 			TEXT("Flags"),
 			TEXT("ClampVectorParameters"),
+			TEXT("IgnoredParameters"),
 			TEXT("ParameterAliases"),
 			TEXT("SecondaryParameterRoutes"),
 			TEXT("DccPlaceholderPrefixes"),
@@ -407,6 +408,24 @@ bool FUianaConfigManager::ValidateRules(FText& OutErrorMessage)
 		}
 	}
 
+	for (const FString& Param : CurrentRules.IgnoredParameters)
+	{
+		if (!Param.Equals(Param.ToLower(), ESearchCase::CaseSensitive))
+		{
+			OutErrorMessage = FText::Format(FText::FromString(TEXT("IgnoredParameters entry '{0}' must be lowercase. Import aborted.")),
+				FText::FromString(Param));
+			UE_LOG(LogUianaConfig, Error, TEXT("%s"), *OutErrorMessage.ToString());
+			return false;
+		}
+
+		if (Param.IsEmpty())
+		{
+			OutErrorMessage = FText::FromString(TEXT("IgnoredParameters contains an empty entry. Import aborted."));
+			UE_LOG(LogUianaConfig, Error, TEXT("%s"), *OutErrorMessage.ToString());
+			return false;
+		}
+	}
+
 	return true;
 }
 
@@ -572,6 +591,24 @@ bool FUianaConfigManager::ShouldClampVectorParameter(const FString& RawParamName
 
 	const FString Lower = RawParamName.ToLower();
 	for (const FString& Param : CurrentRules.ClampVectorParameters)
+	{
+		if (Lower.Equals(Param.ToLower()))
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+bool FUianaConfigManager::IsParameterIgnored(const FString& RawParamName) const
+{
+	if (!bIsLoaded)
+	{
+		return false;
+	}
+
+	const FString Lower = RawParamName.ToLower();
+	for (const FString& Param : CurrentRules.IgnoredParameters)
 	{
 		if (Lower.Equals(Param.ToLower()))
 		{

@@ -25,6 +25,11 @@
 #include "Engine/StaticMesh.h"
 #include "Engine/StaticMeshActor.h"
 #include "Engine/PostProcessVolume.h"
+#include "GameFramework/WorldSettings.h"
+#include "Engine/ExponentialHeightFog.h"
+#include "Components/ExponentialHeightFogComponent.h"
+#include "Engine/Scene.h"
+#include "Engine/TextureCube.h"
 #include "Engine/Engine.h"
 #include "EngineUtils.h"
 #include "Engine/Blueprint.h"
@@ -48,6 +53,33 @@
 namespace
 {
 	static const FString GDefaultAES = TEXT("0x4BE71AF2459CF83899EC9DC2CB60E22AC4B3047E0211034BBABE9D174C069DD6");
+
+	static EComponentMobility::Type UianaParseMobility(const FString& S)
+	{
+		if (S.EndsWith(TEXT("Movable")))    return EComponentMobility::Movable;
+		if (S.EndsWith(TEXT("Stationary"))) return EComponentMobility::Stationary;
+		return EComponentMobility::Static;
+	}
+
+	static bool UianaParseLightUnits(const FString& S, ELightUnits& Out)
+	{
+		if (S.EndsWith(TEXT("Candelas"))) { Out = ELightUnits::Candelas; return true; }
+		if (S.EndsWith(TEXT("Lumens")))   { Out = ELightUnits::Lumens;   return true; }
+		if (S.EndsWith(TEXT("EV")))       { Out = ELightUnits::EV;       return true; }
+		if (S.EndsWith(TEXT("Nits")))     { Out = ELightUnits::Nits;     return true; }
+		if (S.EndsWith(TEXT("Unitless"))) { Out = ELightUnits::Unitless; return true; }
+		return false;
+	}
+
+	static FString UianaNormalizeObjectPath(FString P)
+	{
+		int32 Dot = INDEX_NONE;
+		if (P.FindLastChar(TEXT('.'), Dot) && P.Mid(Dot + 1).IsNumeric())
+		{
+			P = P.Left(Dot);
+		}
+		return P;
+	}
 
 	struct FMapPaths
 	{
@@ -697,6 +729,14 @@ namespace
 						{
 							TSharedPtr<FJsonObject> TPObj = TP->AsObject();
 							if (!TPObj.IsValid()) continue;
+							const TSharedPtr<FJsonObject>* ParamInfo = nullptr;
+							if (TPObj->TryGetObjectField(TEXT("ParameterInfo"), ParamInfo) && ParamInfo && (*ParamInfo).IsValid())
+							{
+								if (FUianaConfigManager::Get().IsParameterIgnored((*ParamInfo)->GetStringField(TEXT("Name"))))
+								{
+									continue;
+								}
+							}
 							const TSharedPtr<FJsonObject>* PVal = nullptr;
 							if (TPObj->TryGetObjectField(TEXT("ParameterValue"), PVal) && PVal && (*PVal).IsValid())
 							{
@@ -780,6 +820,14 @@ namespace
 				{
 					const TSharedPtr<FJsonObject> ParamObj = ParamValue->AsObject();
 					if (!ParamObj.IsValid()) continue;
+					const TSharedPtr<FJsonObject>* ParamInfo = nullptr;
+					if (ParamObj->TryGetObjectField(TEXT("ParameterInfo"), ParamInfo) && ParamInfo && (*ParamInfo).IsValid())
+					{
+						if (FUianaConfigManager::Get().IsParameterIgnored((*ParamInfo)->GetStringField(TEXT("Name"))))
+						{
+							continue;
+						}
+					}
 					const TSharedPtr<FJsonObject>* ParameterValueObj = nullptr;
 					if (ParamObj->TryGetObjectField(TEXT("ParameterValue"), ParameterValueObj) && (*ParameterValueObj).IsValid())
 					{
@@ -909,7 +957,12 @@ namespace
 					{
 						continue;
 					}
-					const FName ParamName((*ParamInfo)->GetStringField(TEXT("Name")).ToLower());
+					const FString RawParamName = (*ParamInfo)->GetStringField(TEXT("Name")).ToLower();
+					if (FUianaConfigManager::Get().IsParameterIgnored(RawParamName))
+					{
+						continue;
+					}
+					const FName ParamName(*RawParamName);
 					UMaterialEditingLibrary::SetMaterialInstanceScalarParameterValue(MIC, ParamName, Obj->GetNumberField(TEXT("ParameterValue")));
 				}
 			}
@@ -931,6 +984,10 @@ namespace
 						continue;
 					}
 					const FString RawParamName = (*ParamInfo)->GetStringField(TEXT("Name")).ToLower();
+					if (FUianaConfigManager::Get().IsParameterIgnored(RawParamName))
+					{
+						continue;
+					}
 					const FName ParamName(*RawParamName);
 					FLinearColor Color(
 						(*ParamValue)->GetNumberField(TEXT("R")),
@@ -975,12 +1032,17 @@ namespace
 						continue;
 					}
 
+					const FString RawParamName = (*ParamInfo)->GetStringField(TEXT("Name")).ToLower();
+					if (FUianaConfigManager::Get().IsParameterIgnored(RawParamName))
+					{
+						continue;
+					}
+
 					const FString TextureName = GetRefName(*ParamValue);
 					const FString TexturePath = FString::Printf(TEXT("/Game/ValorantContent/Textures/%s.%s"), *TextureName, *TextureName);
 					if (UTexture* Texture = Cast<UTexture>(StaticLoadObject(UTexture::StaticClass(), nullptr, *TexturePath)))
 					{
 						BoundTextureCount++;
-						const FString RawParamName = (*ParamInfo)->GetStringField(TEXT("Name")).ToLower();
 						const FName ParamName(*RawParamName);
 						UMaterialEditingLibrary::SetMaterialInstanceTextureParameterValue(MIC, ParamName, Texture);
 
@@ -1258,10 +1320,36 @@ namespace
 					continue;
 				}
 
-				const bool bIsSuperGrid = IsSuperGridMesh(MeshName);
-				const bool bIsBpCollision = OuterName.StartsWith(TEXT("BP_"), ESearchCase::IgnoreCase) || MeshName.StartsWith(TEXT("BP_"), ESearchCase::IgnoreCase);
-				const bool bIsBoxVolume = OuterName.StartsWith(TEXT("Box_6_"), ESearchCase::IgnoreCase) || MeshName.StartsWith(TEXT("Box_6_"), ESearchCase::IgnoreCase);
-				const bool bIsInvisible = bIsSuperGrid || bIsBpCollision || bIsBoxVolume;
+				bool bIsInvisible = false;
+				FString InvisibleFolder = TEXT("Collision");
+
+				if (Config.bMakeMeshesInvisible)
+				{
+					for (const FString& Prefix : Config.InvisibleMeshPrefixes)
+					{
+						if (Prefix.IsEmpty())
+						{
+							continue;
+						}
+						if (OuterName.StartsWith(Prefix, ESearchCase::IgnoreCase) || MeshName.StartsWith(Prefix, ESearchCase::IgnoreCase))
+						{
+							bIsInvisible = true;
+							if (Prefix.StartsWith(TEXT("BP_"), ESearchCase::IgnoreCase) || MeshName.StartsWith(TEXT("BP_"), ESearchCase::IgnoreCase))
+							{
+								InvisibleFolder = TEXT("Collision/Blueprints");
+							}
+							else if (Prefix.StartsWith(TEXT("SuperGrid"), ESearchCase::IgnoreCase) || MeshName.StartsWith(TEXT("SuperGrid"), ESearchCase::IgnoreCase))
+							{
+								InvisibleFolder = TEXT("Collision/SuperGrid");
+							}
+							else
+							{
+								InvisibleFolder = TEXT("Collision/Boxes");
+							}
+							break;
+						}
+					}
+				}
 				auto ApplyActorMaterials = [&](UMeshComponent* Comp)
 				{
 					if (!Config.bImportMaterials || !Comp || !LoadedMesh)
@@ -1436,7 +1524,7 @@ namespace
 					Actor->SetActorLabel(OuterName);
 					if (bIsInvisible)
 					{
-						Actor->SetFolderPath(bIsBpCollision ? TEXT("Collision/Blueprints") : (bIsBoxVolume ? TEXT("Collision/Boxes") : TEXT("Collision/SuperGrid")));
+						Actor->SetFolderPath(*InvisibleFolder);
 						Actor->SetActorHiddenInGame(true);
 						Actor->SetIsTemporarilyHiddenInEditor(true);
 						Actor->HismComponent->SetVisibility(false, true);
@@ -1549,7 +1637,7 @@ namespace
 					UStaticMeshComponent* SMC = Actor->GetStaticMeshComponent();
 					if (bIsInvisible)
 					{
-						Actor->SetFolderPath(bIsBpCollision ? TEXT("Collision/Blueprints") : (bIsBoxVolume ? TEXT("Collision/Boxes") : TEXT("Collision/SuperGrid")));
+						Actor->SetFolderPath(*InvisibleFolder);
 						Actor->SetActorHiddenInGame(true);
 						Actor->SetIsTemporarilyHiddenInEditor(true);
 						SMC->SetVisibility(false, true);
@@ -1717,6 +1805,7 @@ namespace
 					APointLight* PL = World->SpawnActor<APointLight>(APointLight::StaticClass(), Transform);
 					if (PL)
 					{
+						PL->PointLightComponent->SetMobility(EComponentMobility::Movable);
 						LightComp = PL->PointLightComponent;
 						float Atten = 0.0f;
 						if ((*Props)->TryGetNumberField(TEXT("AttenuationRadius"), Atten) && Atten > 0.0f)
@@ -1740,6 +1829,7 @@ namespace
 					ASpotLight* SL = World->SpawnActor<ASpotLight>(ASpotLight::StaticClass(), Transform);
 					if (SL)
 					{
+						SL->SpotLightComponent->SetMobility(EComponentMobility::Movable);
 						LightComp = SL->SpotLightComponent;
 						float Atten = 0.0f;
 						if ((*Props)->TryGetNumberField(TEXT("AttenuationRadius"), Atten) && Atten > 0.0f)
@@ -1768,6 +1858,7 @@ namespace
 					ARectLight* RL = World->SpawnActor<ARectLight>(ARectLight::StaticClass(), Transform);
 					if (RL)
 					{
+						RL->RectLightComponent->SetMobility(EComponentMobility::Movable);
 						LightComp = RL->RectLightComponent;
 						float Atten = 0.0f;
 						if ((*Props)->TryGetNumberField(TEXT("AttenuationRadius"), Atten) && Atten > 0.0f)
@@ -1796,14 +1887,57 @@ namespace
 					ASkyLight* SkyL = World->SpawnActor<ASkyLight>(ASkyLight::StaticClass(), Transform);
 					if (SkyL)
 					{
-						SpawnedLight = SkyL;
-						if (USkyLightComponent* SkyComp = SkyL->GetLightComponent())
+						SkyL->SetActorLabel(OuterName);
+						SkyL->SetFolderPath(TEXT("Lights"));
+						if (USkyLightComponent* Sky = SkyL->GetLightComponent())
 						{
-							SkyComp->SetMobility(EComponentMobility::Movable);
-							SkyComp->bRealTimeCapture = false;
-							SkyComp->SetIntensity(2.0f);
-							SkyComp->SkyDistanceThreshold = 24000.0f;
-							SkyComp->IndirectLightingIntensity = 1.0f;
+							Sky->SetMobility(EComponentMobility::Movable);
+							Sky->SetRealTimeCapture(false);
+
+							UTextureCube* Cube = nullptr;
+							const TSharedPtr<FJsonObject>* CubeObj = nullptr;
+							if ((*Props)->TryGetObjectField(TEXT("Cubemap"), CubeObj) && CubeObj && (*CubeObj).IsValid())
+							{
+								FString Path;
+								if ((*CubeObj)->TryGetStringField(TEXT("ObjectPath"), Path))
+								{
+									Cube = LoadObject<UTextureCube>(nullptr, *UianaNormalizeObjectPath(Path));
+								}
+							}
+
+							if (Cube)
+							{
+								Sky->SourceType = SLS_SpecifiedCubemap;
+								Sky->SetCubemap(Cube);
+								Sky->bLowerHemisphereIsBlack = false;
+								Sky->MarkRenderStateDirty();
+								Sky->RecaptureSky();
+							}
+							else
+							{
+								Sky->bLowerHemisphereIsBlack = false;
+								Sky->MarkRenderStateDirty();
+							}
+
+							float I = 1.0f;
+							if ((*Props)->TryGetNumberField(TEXT("Intensity"), I) && I > 0.0f)
+							{
+								Sky->SetIntensity(I);
+							}
+
+							float II = 1.0f;
+							if ((*Props)->TryGetNumberField(TEXT("IndirectLightingIntensity"), II))
+							{
+								Sky->SetIndirectLightingIntensity(FMath::Clamp(II, 0.0f, 100.0f));
+							}
+
+							float Thresh = 0.0f;
+							if ((*Props)->TryGetNumberField(TEXT("SkyDistanceThreshold"), Thresh) && Thresh > 0.0f)
+							{
+								Sky->SkyDistanceThreshold = Thresh;
+								Sky->MarkRenderStateDirty();
+							}
+
 							const TSharedPtr<FJsonObject>* ColorObj = nullptr;
 							if ((*Props)->TryGetObjectField(TEXT("LightColor"), ColorObj) && ColorObj && (*ColorObj).IsValid())
 							{
@@ -1811,10 +1945,11 @@ namespace
 								(*ColorObj)->TryGetNumberField(TEXT("R"), R);
 								(*ColorObj)->TryGetNumberField(TEXT("G"), G);
 								(*ColorObj)->TryGetNumberField(TEXT("B"), B);
-								SkyComp->SetLightColor(FLinearColor(FColor(R, G, B, 255)));
+								Sky->SetLightColor(FLinearColor(FColor(R, G, B, 255)));
 							}
 						}
 					}
+					continue;
 				}
 				else if (Type == TEXT("DirectionalLightComponent"))
 				{
@@ -1840,52 +1975,109 @@ namespace
 					SpawnedLight->SetFolderPath(TEXT("Lights"));
 					if (LightComp)
 					{
-						LightComp->SetMobility(EComponentMobility::Movable);
-						if (Type != TEXT("DirectionalLightComponent"))
+						if (Type == TEXT("DirectionalLightComponent"))
 						{
-							LightComp->SetCastShadows(false);
-						}
+							float SunIntensity = 7.0f;
+							(*Props)->TryGetNumberField(TEXT("Intensity"), SunIntensity);
+							LightComp->SetIntensity(SunIntensity);
 
-						float IntensityVal = 4.5f;
-						if ((*Props)->TryGetNumberField(TEXT("Intensity"), IntensityVal) && IntensityVal > 0.0f)
-						{
-							if (Type == TEXT("DirectionalLightComponent"))
+							float IndirectIntensity = 2.0f;
+							if ((*Props)->TryGetNumberField(TEXT("IndirectLightingIntensity"), IndirectIntensity))
 							{
-								if (IntensityVal > 100.0f)
-								{
-									IntensityVal /= 1000.0f;
-								}
-								IntensityVal = FMath::Clamp(IntensityVal, 3.5f, 6.0f);
+								LightComp->SetIndirectLightingIntensity(FMath::Clamp(IndirectIntensity, 0.0f, 100.0f));
 							}
 							else
 							{
-								if (IntensityVal > 500.0f)
-								{
-									IntensityVal /= 100.0f;
-								}
-								IntensityVal = FMath::Clamp(IntensityVal, 0.1f, 15.0f);
+								LightComp->SetIndirectLightingIntensity(2.0f);
 							}
-						}
-						LightComp->SetIntensity(IntensityVal);
 
-						float IndirectIntensity = 0.0f;
-						if ((*Props)->TryGetNumberField(TEXT("IndirectLightingIntensity"), IndirectIntensity) && IndirectIntensity > 0.0f)
-						{
-							LightComp->SetIndirectLightingIntensity(FMath::Clamp(IndirectIntensity, 0.0f, 1.0f));
+							const TSharedPtr<FJsonObject>* ColorObj = nullptr;
+							if ((*Props)->TryGetObjectField(TEXT("LightColor"), ColorObj) && ColorObj && (*ColorObj).IsValid())
+							{
+								int32 R = 255, G = 255, B = 255;
+								(*ColorObj)->TryGetNumberField(TEXT("R"), R);
+								(*ColorObj)->TryGetNumberField(TEXT("G"), G);
+								(*ColorObj)->TryGetNumberField(TEXT("B"), B);
+								LightComp->SetLightColor(FLinearColor(FColor(R, G, B, 255)));
+							}
+
+							FString MobilityStr;
+							EComponentMobility::Type FinalMobility = EComponentMobility::Stationary;
+							if (Config.bHonorJsonMobility && (*Props)->TryGetStringField(TEXT("Mobility"), MobilityStr))
+							{
+								FinalMobility = UianaParseMobility(MobilityStr);
+							}
+							LightComp->SetMobility(FinalMobility);
 						}
 						else
 						{
-							LightComp->SetIndirectLightingIntensity(1.0f);
-						}
+							ELightUnits Units = ELightUnits::Unitless;
+							if (ULocalLightComponent* Local = Cast<ULocalLightComponent>(LightComp))
+							{
+								FString UnitsStr;
+								if ((*Props)->TryGetStringField(TEXT("IntensityUnits"), UnitsStr))
+								{
+									UianaParseLightUnits(UnitsStr, Units);
+								}
+								Local->SetIntensityUnits(Units);
+							}
 
-						const TSharedPtr<FJsonObject>* ColorObj = nullptr;
-						if ((*Props)->TryGetObjectField(TEXT("LightColor"), ColorObj) && ColorObj && (*ColorObj).IsValid())
-						{
-							int32 R = 255, G = 255, B = 255;
-							(*ColorObj)->TryGetNumberField(TEXT("R"), R);
-							(*ColorObj)->TryGetNumberField(TEXT("G"), G);
-							(*ColorObj)->TryGetNumberField(TEXT("B"), B);
-							LightComp->SetLightColor(FLinearColor(FColor(R, G, B, 255)));
+							if (UPointLightComponent* Point = Cast<UPointLightComponent>(LightComp))
+							{
+								bool bInverse = true;
+								if ((*Props)->TryGetBoolField(TEXT("bUseInverseSquaredFalloff"), bInverse))
+								{
+									Point->SetUseInverseSquaredFalloff(bInverse);
+								}
+								float Exp = 0.0f;
+								if (!bInverse && (*Props)->TryGetNumberField(TEXT("LightFalloffExponent"), Exp) && Exp > 0.0f)
+								{
+									Point->SetLightFalloffExponent(Exp);
+								}
+							}
+
+							double RawIntensity = 4.5;
+							if ((*Props)->TryGetNumberField(TEXT("Intensity"), RawIntensity) && RawIntensity >= 0.0)
+							{
+								const double Scale = (Units == ELightUnits::Unitless) ? (double)Config.UnitlessIntensityScale : 1.0;
+								LightComp->SetIntensity((float)FMath::Clamp(RawIntensity * Scale, 0.0, 1.0e7));
+							}
+							else
+							{
+								LightComp->SetIntensity(4.5f);
+							}
+
+							float IndirectIntensity = 1.0f;
+							if ((*Props)->TryGetNumberField(TEXT("IndirectLightingIntensity"), IndirectIntensity) && IndirectIntensity > 0.0f)
+							{
+								LightComp->SetIndirectLightingIntensity(FMath::Clamp(IndirectIntensity, 0.0f, 100.0f));
+							}
+							else
+							{
+								LightComp->SetIndirectLightingIntensity(1.0f);
+							}
+
+							const TSharedPtr<FJsonObject>* ColorObj = nullptr;
+							if ((*Props)->TryGetObjectField(TEXT("LightColor"), ColorObj) && ColorObj && (*ColorObj).IsValid())
+							{
+								int32 R = 255, G = 255, B = 255;
+								(*ColorObj)->TryGetNumberField(TEXT("R"), R);
+								(*ColorObj)->TryGetNumberField(TEXT("G"), G);
+								(*ColorObj)->TryGetNumberField(TEXT("B"), B);
+								LightComp->SetLightColor(FLinearColor(FColor(R, G, B, 255)));
+							}
+
+							bool bCastShadows = true;
+							(*Props)->TryGetBoolField(TEXT("CastShadows"), bCastShadows);
+							LightComp->SetCastShadows(bCastShadows);
+
+							FString MobilityStr;
+							EComponentMobility::Type FinalMobility = EComponentMobility::Static;
+							if (Config.bHonorJsonMobility && (*Props)->TryGetStringField(TEXT("Mobility"), MobilityStr))
+							{
+								FinalMobility = UianaParseMobility(MobilityStr);
+							}
+							LightComp->SetMobility(FinalMobility);
 						}
 					}
 				}
@@ -1904,48 +2096,147 @@ namespace
 					const TSharedPtr<FJsonObject>* SettingsObj = nullptr;
 					if ((*Props)->TryGetObjectField(TEXT("Settings"), SettingsObj) && SettingsObj && (*SettingsObj).IsValid())
 					{
+						auto GetOverride = [&](const TCHAR* Flag) -> bool
+						{
+							bool bFlagVal = false;
+							return (*SettingsObj)->TryGetBoolField(Flag, bFlagVal) && bFlagVal;
+						};
+
 						float WhiteTemp = 0.0f;
-						if ((*SettingsObj)->TryGetNumberField(TEXT("WhiteTemp"), WhiteTemp) && WhiteTemp > 0.0f)
+						if ((*SettingsObj)->TryGetNumberField(TEXT("WhiteTemp"), WhiteTemp) && GetOverride(TEXT("bOverride_WhiteTemp")))
 						{
 							PPV->Settings.bOverride_WhiteTemp = true;
 							PPV->Settings.WhiteTemp = WhiteTemp;
 						}
+
 						float BloomInt = 0.0f;
-						if ((*SettingsObj)->TryGetNumberField(TEXT("BloomIntensity"), BloomInt) && BloomInt > 0.0f)
+						if ((*SettingsObj)->TryGetNumberField(TEXT("BloomIntensity"), BloomInt) && GetOverride(TEXT("bOverride_BloomIntensity")))
 						{
 							PPV->Settings.bOverride_BloomIntensity = true;
 							PPV->Settings.BloomIntensity = BloomInt;
 						}
+
 						float IndirectInt = 0.0f;
-						if ((*SettingsObj)->TryGetNumberField(TEXT("IndirectLightingIntensity"), IndirectInt) && IndirectInt > 0.0f)
+						if ((*SettingsObj)->TryGetNumberField(TEXT("IndirectLightingIntensity"), IndirectInt) && GetOverride(TEXT("bOverride_IndirectLightingIntensity")))
 						{
 							PPV->Settings.bOverride_IndirectLightingIntensity = true;
 							PPV->Settings.IndirectLightingIntensity = IndirectInt;
 						}
-					}
 
-					PPV->Settings.bOverride_AutoExposureMethod = true;
-					PPV->Settings.AutoExposureMethod = EAutoExposureMethod::AEM_Basic;
-					PPV->Settings.bOverride_AutoExposureMinBrightness = true;
-					PPV->Settings.AutoExposureMinBrightness = 0.5f;
-					PPV->Settings.bOverride_AutoExposureMaxBrightness = true;
-					PPV->Settings.AutoExposureMaxBrightness = 2.0f;
-					PPV->Settings.bOverride_AutoExposureBias = true;
-					PPV->Settings.AutoExposureBias = 0.5f;
-					PPV->Settings.bOverride_AmbientOcclusionIntensity = true;
-					PPV->Settings.AmbientOcclusionIntensity = 0.25f;
-					PPV->Settings.bOverride_ColorSaturation = true;
-					PPV->Settings.ColorSaturation = FVector4(1.08f, 1.08f, 1.08f, 1.0f);
-					PPV->Settings.bOverride_IndirectLightingIntensity = true;
-					PPV->Settings.IndirectLightingIntensity = 1.0f;
-					PPV->Settings.bOverride_IndirectLightingColor = true;
-					PPV->Settings.IndirectLightingColor = FLinearColor(1.0f, 0.956f, 0.88f, 1.0f);
-					PPV->Settings.bOverride_BloomIntensity = true;
-					PPV->Settings.BloomIntensity = 0.05f;
-					if (!PPV->Settings.bOverride_WhiteTemp)
+						const TSharedPtr<FJsonObject>* IndirectColorObj = nullptr;
+						if (GetOverride(TEXT("bOverride_IndirectLightingColor")) && (*SettingsObj)->TryGetObjectField(TEXT("IndirectLightingColor"), IndirectColorObj) && IndirectColorObj && (*IndirectColorObj).IsValid())
+						{
+							float R = 1.0f, G = 1.0f, B = 1.0f, A = 1.0f;
+							(*IndirectColorObj)->TryGetNumberField(TEXT("R"), R);
+							(*IndirectColorObj)->TryGetNumberField(TEXT("G"), G);
+							(*IndirectColorObj)->TryGetNumberField(TEXT("B"), B);
+							(*IndirectColorObj)->TryGetNumberField(TEXT("A"), A);
+							PPV->Settings.bOverride_IndirectLightingColor = true;
+							PPV->Settings.IndirectLightingColor = FLinearColor(R, G, B, A);
+						}
+
+						bool bOverrideMin = GetOverride(TEXT("bOverride_AutoExposureMinBrightness"));
+						bool bOverrideMax = GetOverride(TEXT("bOverride_AutoExposureMaxBrightness"));
+						float MinBri = 1.0f, MaxBri = 1.0f;
+						(*SettingsObj)->TryGetNumberField(TEXT("AutoExposureMinBrightness"), MinBri);
+						(*SettingsObj)->TryGetNumberField(TEXT("AutoExposureMaxBrightness"), MaxBri);
+
+						if (bOverrideMin && bOverrideMax && FMath::IsNearlyEqual(MinBri, MaxBri))
+						{
+							PPV->Settings.bOverride_AutoExposureMethod = true;
+							PPV->Settings.AutoExposureMethod = EAutoExposureMethod::AEM_Manual;
+						}
+						else
+						{
+							if (bOverrideMin)
+							{
+								PPV->Settings.bOverride_AutoExposureMinBrightness = true;
+								PPV->Settings.AutoExposureMinBrightness = MinBri;
+							}
+							if (bOverrideMax)
+							{
+								PPV->Settings.bOverride_AutoExposureMaxBrightness = true;
+								PPV->Settings.AutoExposureMaxBrightness = MaxBri;
+							}
+						}
+						PPV->Settings.bOverride_AutoExposureBias = true;
+						PPV->Settings.AutoExposureBias = 9.5f;
+					}
+				}
+				continue;
+			}
+
+			if (Config.bImportFog && (Type == TEXT("ExponentialHeightFogComponent") || Type == TEXT("ExponentialHeightFog")))
+			{
+				AExponentialHeightFog* Fog = World->SpawnActor<AExponentialHeightFog>(AExponentialHeightFog::StaticClass(), Transform);
+				if (Fog)
+				{
+					Fog->SetActorLabel(OuterName);
+					Fog->SetFolderPath(TEXT("Lights"));
+					if (UExponentialHeightFogComponent* FogComp = Fog->GetComponent())
 					{
-						PPV->Settings.bOverride_WhiteTemp = true;
-						PPV->Settings.WhiteTemp = 6500.0f;
+						float Density = 0.05f;
+						if ((*Props)->TryGetNumberField(TEXT("FogDensity"), Density))
+						{
+							FogComp->SetFogDensity(Density);
+						}
+						float Falloff = 0.35f;
+						if ((*Props)->TryGetNumberField(TEXT("FogHeightFalloff"), Falloff))
+						{
+							FogComp->SetFogHeightFalloff(Falloff);
+						}
+						float StartDist = 0.0f;
+						if ((*Props)->TryGetNumberField(TEXT("StartDistance"), StartDist))
+						{
+							FogComp->SetStartDistance(StartDist);
+						}
+						float MaxOpacity = 1.0f;
+						if ((*Props)->TryGetNumberField(TEXT("FogMaxOpacity"), MaxOpacity))
+						{
+							FogComp->SetFogMaxOpacity(MaxOpacity);
+						}
+
+						const TSharedPtr<FJsonObject>* InscatterObj = nullptr;
+						if ((*Props)->TryGetObjectField(TEXT("FogInscatteringLuminance"), InscatterObj) && InscatterObj && (*InscatterObj).IsValid())
+						{
+							float R = 1.0f, G = 1.0f, B = 1.0f, A = 1.0f;
+							(*InscatterObj)->TryGetNumberField(TEXT("R"), R);
+							(*InscatterObj)->TryGetNumberField(TEXT("G"), G);
+							(*InscatterObj)->TryGetNumberField(TEXT("B"), B);
+							(*InscatterObj)->TryGetNumberField(TEXT("A"), A);
+							FogComp->SetFogInscatteringColor(FLinearColor(R, G, B, A));
+						}
+						else if ((*Props)->TryGetObjectField(TEXT("FogInscatteringColor"), InscatterObj) && InscatterObj && (*InscatterObj).IsValid())
+						{
+							float R = 1.0f, G = 1.0f, B = 1.0f, A = 1.0f;
+							(*InscatterObj)->TryGetNumberField(TEXT("R"), R);
+							(*InscatterObj)->TryGetNumberField(TEXT("G"), G);
+							(*InscatterObj)->TryGetNumberField(TEXT("B"), B);
+							(*InscatterObj)->TryGetNumberField(TEXT("A"), A);
+							FogComp->SetFogInscatteringColor(FLinearColor(R, G, B, A));
+						}
+
+						const TSharedPtr<FJsonObject>* DirInscatterObj = nullptr;
+						if ((*Props)->TryGetObjectField(TEXT("DirectionalInscatteringLuminance"), DirInscatterObj) && DirInscatterObj && (*DirInscatterObj).IsValid())
+						{
+							float R = 1.0f, G = 1.0f, B = 1.0f, A = 1.0f;
+							(*DirInscatterObj)->TryGetNumberField(TEXT("R"), R);
+							(*DirInscatterObj)->TryGetNumberField(TEXT("G"), G);
+							(*DirInscatterObj)->TryGetNumberField(TEXT("B"), B);
+							(*DirInscatterObj)->TryGetNumberField(TEXT("A"), A);
+							FogComp->SetDirectionalInscatteringColor(FLinearColor(R, G, B, A));
+						}
+						else if ((*Props)->TryGetObjectField(TEXT("DirectionalInscatteringColor"), DirInscatterObj) && DirInscatterObj && (*DirInscatterObj).IsValid())
+						{
+							float R = 1.0f, G = 1.0f, B = 1.0f, A = 1.0f;
+							(*DirInscatterObj)->TryGetNumberField(TEXT("R"), R);
+							(*DirInscatterObj)->TryGetNumberField(TEXT("G"), G);
+							(*DirInscatterObj)->TryGetNumberField(TEXT("B"), B);
+							(*DirInscatterObj)->TryGetNumberField(TEXT("A"), A);
+							FogComp->SetDirectionalInscatteringColor(FLinearColor(R, G, B, A));
+						}
+
+						FogComp->MarkRenderStateDirty();
 					}
 				}
 				continue;
@@ -2367,9 +2658,113 @@ namespace
 			ImportMapActors(UMapFile, Config);
 		}
 
-		if (Config.bImportLights && GEditor)
+		if (UWorld* World = GEditor ? GEditor->GetEditorWorldContext().World() : nullptr)
 		{
-			if (UWorld* World = GEditor->GetEditorWorldContext().World())
+			if (AWorldSettings* WorldSettings = World->GetWorldSettings())
+			{
+				WorldSettings->LightmassSettings.NumIndirectLightingBounces = 10;
+				WorldSettings->LightmassSettings.NumSkyLightingBounces = 1;
+				WorldSettings->LightmassSettings.EnvironmentColor = FColor(0xEA, 0xF3, 0xFF, 0xFF);
+				WorldSettings->LightmassSettings.EnvironmentIntensity = 1.5f;
+				WorldSettings->LightmassSettings.DiffuseBoost = 1.5f;
+				WorldSettings->MarkPackageDirty();
+			}
+
+			// Ensure all SkyLights in the map are Movable as requested
+			for (TActorIterator<ASkyLight> It(World); It; ++It)
+			{
+				if (USkyLightComponent* SkyComp = (*It)->GetLightComponent())
+				{
+					SkyComp->SetMobility(EComponentMobility::Movable);
+				}
+			}
+
+			// Ensure all PostProcessVolumes in the map have exposure = 9.5 as requested
+			for (TActorIterator<APostProcessVolume> It(World); It; ++It)
+			{
+				(*It)->Settings.bOverride_AutoExposureBias = true;
+				(*It)->Settings.AutoExposureBias = 9.5f;
+			}
+
+			if (Config.bSpawnDefaultSunAndSky)
+			{
+				// Ensure DirectionalLight is present (Stationary, 7.0 lux fallback)
+				int32 NumDirectionalLights = 0;
+				for (TActorIterator<ADirectionalLight> It(World); It; ++It)
+				{
+					NumDirectionalLights++;
+					if ((*It)->GetActorLabel() == TEXT("Valorant_DirectionalLight"))
+					{
+						if (ULightComponent* DLComp = (*It)->GetComponent())
+						{
+							DLComp->SetIntensity(7.0f);
+							DLComp->Intensity = 7.0f;
+							DLComp->SetMobility(EComponentMobility::Stationary);
+							DLComp->MarkRenderStateDirty();
+						}
+					}
+				}
+
+				if (NumDirectionalLights == 0)
+				{
+					const FRotator DefaultSunRotation(-45.0f, -45.0f, 0.0f);
+					const FVector DefaultSunLocation(0.0f, 0.0f, 1000.0f);
+					ADirectionalLight* DL = World->SpawnActor<ADirectionalLight>(ADirectionalLight::StaticClass(), FTransform(DefaultSunRotation, DefaultSunLocation));
+					if (DL)
+					{
+						DL->SetActorLabel(TEXT("Valorant_DirectionalLight"));
+						DL->SetFolderPath(TEXT("Lights"));
+						if (ULightComponent* DLComp = DL->GetComponent())
+						{
+							DLComp->SetIntensity(7.0f);
+							DLComp->Intensity = 7.0f;
+							DLComp->SetMobility(EComponentMobility::Stationary);
+							DLComp->MarkRenderStateDirty();
+						}
+					}
+				}
+
+				// Ensure SkyLight is present on default options
+				bool bHasSkyLight = false;
+				for (TActorIterator<ASkyLight> It(World); It; ++It)
+				{
+					bHasSkyLight = true;
+					break;
+				}
+				if (!bHasSkyLight)
+				{
+					ASkyLight* SkyL = World->SpawnActor<ASkyLight>(ASkyLight::StaticClass());
+					if (SkyL)
+					{
+						SkyL->SetActorLabel(TEXT("Valorant_SkyLight"));
+						SkyL->SetFolderPath(TEXT("Lights"));
+						if (USkyLightComponent* SkyComp = SkyL->GetLightComponent())
+						{
+							SkyComp->SetMobility(EComponentMobility::Movable);
+							SkyComp->MarkRenderStateDirty();
+						}
+					}
+				}
+			}
+			else
+			{
+				for (TActorIterator<ADirectionalLight> It(World); It; ++It)
+				{
+					if ((*It)->GetActorLabel() == TEXT("Valorant_DirectionalLight"))
+					{
+						World->DestroyActor(*It);
+					}
+				}
+				for (TActorIterator<ASkyLight> It(World); It; ++It)
+				{
+					if ((*It)->GetActorLabel() == TEXT("Valorant_SkyLight"))
+					{
+						World->DestroyActor(*It);
+					}
+				}
+			}
+
+			if (Config.bImportLights)
 			{
 				bool bHasPPV = false;
 				for (TActorIterator<APostProcessVolume> It(World); It; ++It)
@@ -2386,67 +2781,49 @@ namespace
 						PPV->SetFolderPath(TEXT("Lights"));
 						PPV->bUnbound = true;
 						PPV->Settings.bOverride_AutoExposureMethod = true;
-						PPV->Settings.AutoExposureMethod = EAutoExposureMethod::AEM_Basic;
-						PPV->Settings.bOverride_AutoExposureMinBrightness = true;
-						PPV->Settings.AutoExposureMinBrightness = 0.5f;
-						PPV->Settings.bOverride_AutoExposureMaxBrightness = true;
-						PPV->Settings.AutoExposureMaxBrightness = 2.0f;
+						PPV->Settings.AutoExposureMethod = EAutoExposureMethod::AEM_Manual;
 						PPV->Settings.bOverride_AutoExposureBias = true;
-						PPV->Settings.AutoExposureBias = 0.0f;
+						PPV->Settings.AutoExposureBias = 9.5f;
 						PPV->Settings.bOverride_WhiteTemp = true;
 						PPV->Settings.WhiteTemp = 6500.0f;
-						PPV->Settings.bOverride_ColorSaturation = true;
-						PPV->Settings.ColorSaturation = FVector4(1.08f, 1.08f, 1.08f, 1.0f);
 						PPV->Settings.bOverride_BloomIntensity = true;
 						PPV->Settings.BloomIntensity = 0.05f;
-						PPV->Settings.bOverride_IndirectLightingIntensity = true;
-						PPV->Settings.IndirectLightingIntensity = 1.0f;
-						PPV->Settings.bOverride_IndirectLightingColor = true;
-						PPV->Settings.IndirectLightingColor = FLinearColor(1.0f, 0.956f, 0.88f, 1.0f);
 					}
 				}
 
-				ASkyLight* SkyL = nullptr;
-				for (TActorIterator<ASkyLight> It(World); It; ++It)
+				if (Config.bSpawnSkyAtmosphere)
 				{
-					SkyL = *It;
-					break;
-				}
-				if (!SkyL)
-				{
-					SkyL = World->SpawnActor<ASkyLight>(ASkyLight::StaticClass());
-					if (SkyL)
+					bool bHasSkyAtmosphere = false;
+					for (TActorIterator<ASkyAtmosphere> It(World); It; ++It)
 					{
-						SkyL->SetActorLabel(TEXT("Valorant_SkyLight"));
-						SkyL->SetFolderPath(TEXT("Lights"));
+						bHasSkyAtmosphere = true;
+						break;
+					}
+					if (!bHasSkyAtmosphere)
+					{
+						ASkyAtmosphere* SkyAtmo = World->SpawnActor<ASkyAtmosphere>(ASkyAtmosphere::StaticClass());
+						if (SkyAtmo)
+						{
+							SkyAtmo->SetActorLabel(TEXT("Valorant_SkyAtmosphere"));
+							SkyAtmo->SetFolderPath(TEXT("Lights"));
+						}
+					}
+					for (TActorIterator<ASkyLight> It(World); It; ++It)
+					{
+						if (USkyLightComponent* S = (*It)->GetLightComponent())
+						{
+							S->RecaptureSky();
+						}
 					}
 				}
-				if (SkyL)
+				else
 				{
-					if (USkyLightComponent* SkyComp = SkyL->GetLightComponent())
+					for (TActorIterator<ASkyAtmosphere> It(World); It; ++It)
 					{
-						SkyComp->SetMobility(EComponentMobility::Movable);
-						SkyComp->bRealTimeCapture = false;
-						SkyComp->SetIntensity(2.0f);
-						SkyComp->SkyDistanceThreshold = 24000.0f;
-						SkyComp->IndirectLightingIntensity = 1.0f;
-						SkyComp->MarkRenderStateDirty();
-					}
-				}
-
-				bool bHasSkyAtmosphere = false;
-				for (TActorIterator<ASkyAtmosphere> It(World); It; ++It)
-				{
-					bHasSkyAtmosphere = true;
-					break;
-				}
-				if (!bHasSkyAtmosphere)
-				{
-					ASkyAtmosphere* SkyAtmo = World->SpawnActor<ASkyAtmosphere>(ASkyAtmosphere::StaticClass());
-					if (SkyAtmo)
-					{
-						SkyAtmo->SetActorLabel(TEXT("Valorant_SkyAtmosphere"));
-						SkyAtmo->SetFolderPath(TEXT("Lights"));
+						if ((*It)->GetActorLabel() == TEXT("Valorant_SkyAtmosphere"))
+						{
+							World->DestroyActor(*It);
+						}
 					}
 				}
 			}
@@ -2475,9 +2852,16 @@ bool FUianaImporter::BuildConfig(const UUianaDataSettings& Settings, FUianaImpor
 	OutConfig.DecalFilterPrefixes = Settings.DecalFilterPrefixes;
 	OutConfig.bImportBlueprints = Settings.ImportBlueprints;
 	OutConfig.bImportLights = Settings.ImportLights;
+	OutConfig.bSpawnDefaultSunAndSky = Settings.bSpawnDefaultSunAndSky;
+	OutConfig.UnitlessIntensityScale = Settings.UnitlessIntensityScale;
+	OutConfig.bHonorJsonMobility = Settings.bHonorJsonMobility;
+	OutConfig.bSpawnSkyAtmosphere = Settings.bSpawnSkyAtmosphere;
+	OutConfig.bImportFog = Settings.bImportFog;
 	OutConfig.bImportMeshes = Settings.ImportMeshes;
 	OutConfig.bFilterMeshes = Settings.bFilterMeshes;
 	OutConfig.MeshFilterPrefixes = Settings.MeshFilterPrefixes;
+	OutConfig.bMakeMeshesInvisible = Settings.bMakeMeshesInvisible;
+	OutConfig.InvisibleMeshPrefixes = Settings.InvisibleMeshPrefixes;
 	OutConfig.bImportMaterials = Settings.ImportMaterials;
 	OutConfig.bImportSublevels = Settings.UseSubLevels;
 	OutConfig.LightmapResolutionMultiplier = FMath::Max(Settings.LightmapResolutionMultiplier, 0.01f);

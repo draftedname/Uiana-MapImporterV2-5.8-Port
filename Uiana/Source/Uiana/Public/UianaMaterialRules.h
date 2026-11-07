@@ -126,6 +126,9 @@ struct FUianaMaterialRules
 	TArray<FString> ClampVectorParameters;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rules")
+	TArray<FString> IgnoredParameters;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rules")
 	TMap<FString, FString> ParameterAliases; // e.g. "materialtexture" -> "diffuse"
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rules")

@@ -214,8 +214,10 @@ UObject* UBPFL::SetMeshReference(FString MeshObjectName, FString MeshType)
 void UBPFL::ImportTextures(TArray<FString> AllTexturesPath)
 {
 	auto AutomatedData = NewObject<UAutomatedAssetImportData>();
+	AutomatedData->AddToRoot();
 	AutomatedData->bReplaceExisting = false;
 	auto TextureFactory = NewObject<UTextureFactory>();
+	TextureFactory->AddToRoot();
 	TextureFactory->NoCompression = true;
 	TextureFactory->AutomatedImportData = AutomatedData;
 	FScopedSlowTask ImportTask(AllTexturesPath.Num(), FText::FromString("Importing Textures"));
@@ -240,32 +242,32 @@ void UBPFL::ImportTextures(TArray<FString> AllTexturesPath)
 		auto TexPackage = CreatePackage(*PathForTextures);
 		TexPackage->FullyLoad();
 		auto bCancelled = false;
+
+		if (NewTxName.EndsWith(TEXT("MRA")))
+		{
+			TextureFactory->ColorSpaceMode = ETextureSourceColorSpace::Linear;
+			TextureFactory->CompressionSettings = TC_Masks;
+		}
+		else if (NewTxName.EndsWith(TEXT("NM")))
+		{
+			TextureFactory->ColorSpaceMode = ETextureSourceColorSpace::Linear;
+			TextureFactory->CompressionSettings = TC_Normalmap;
+		}
+		else
+		{
+			TextureFactory->ColorSpaceMode = ETextureSourceColorSpace::SRGB;
+			TextureFactory->CompressionSettings = TC_Default;
+		}
+
 		auto CreatedTexture = TextureFactory->FactoryCreateFile(UTexture2D::StaticClass(), TexPackage, FName(*NewTxName), RF_Public | RF_Standalone, tx, NULL, GWarn, bCancelled); 
 		if (CreatedTexture == nullptr)
 		{
 			continue;
 		}
 		auto Tex = CastChecked<UTexture2D>(CreatedTexture);
-		auto CompressionSetting = Tex->CompressionSettings;
-		if (NewTxName.EndsWith("MRA") && CompressionSetting != TC_Masks)
-		{
-			Tex->SRGB = false;
-			Tex->CompressionSettings = TC_Masks;
-		}
-		if (NewTxName.EndsWith("NM") && CompressionSetting != TC_Normalmap)
-		{
-			Tex->SRGB = false;
-			Tex->CompressionSettings = TC_Normalmap;
-		}
-		if (NewTxName.EndsWith("DF") && CompressionSetting != TC_Normalmap)
-		{
-			Tex->SRGB = true;
-			Tex->CompressionSettings = TC_Default;
-		}
 		ImportTask.DefaultMessage = FText::FromString(FString::Printf(TEXT("Importing Texture : %d of %d: %s"), ActorIdx + 1, AllTexturesPath.Num() + 1, *NewTxName));
 		ImportTask.EnterProgressFrame();
 		
-		Tex->UpdateResource();
 		FAssetRegistryModule::AssetCreated(Tex);
 		FSavePackageArgs SaveArgs;
 		UPackage::SavePackage(TexPackage, Tex, *PackageFileName, SaveArgs);
@@ -279,13 +281,18 @@ void UBPFL::ImportTextures(TArray<FString> AllTexturesPath)
 			CollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS);
 		}
 	}
+
+	TextureFactory->RemoveFromRoot();
+	AutomatedData->RemoveFromRoot();
 }
 
 void UBPFL::ImportMeshes(TArray<FString> AllMeshesPath, FString ObjectsPath)
 {
 	auto AutomatedData = NewObject<UAutomatedAssetImportData>();
+	AutomatedData->AddToRoot();
 	AutomatedData->bReplaceExisting = false;
 	auto ModelFactory = NewObject<UEFModelFactory>();
+	ModelFactory->AddToRoot();
 	ModelFactory->AutomatedImportData = AutomatedData;
 	FScopedSlowTask ImportTask(AllMeshesPath.Num(), FText::FromString("Importing Meshes"));
 	ImportTask.MakeDialog(true); 
@@ -525,6 +532,9 @@ void UBPFL::ImportMeshes(TArray<FString> AllMeshesPath, FString ObjectsPath)
 			CollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS);
 		}
 	}
+
+	ModelFactory->RemoveFromRoot();
+	AutomatedData->RemoveFromRoot();
 }
 
 ECollisionTraceFlag UBPFL::GetTraceFlag(FString tflag)
@@ -556,6 +566,13 @@ bool UBPFL::ImportValorantMap(FString MapName, FString PaksFolder, FString Expor
 {
 	UUianaDataSettings* Settings = GetMutableDefault<UUianaDataSettings>();
 	Settings->LoadConfig();
+	if (!MapName.IsEmpty())
+	{
+		Settings->Map = MapName;
+	}
+	Settings->InitializeDefaultPresets();
+	Settings->LoadPresetForMap(Settings->Map);
+
 	if (!ExportFolder.IsEmpty())
 	{
 		Settings->ExportFolder.Path = ExportFolder;
@@ -568,10 +585,6 @@ bool UBPFL::ImportValorantMap(FString MapName, FString PaksFolder, FString Expor
 	Settings->ImportMaterials = bImportMaterials;
 	Settings->ImportLights = bImportLights;
 	Settings->ImportDecals = bImportDecals;
-	if (!MapName.IsEmpty())
-	{
-		Settings->Map = MapName;
-	}
 
 	return FUianaImporter::Run(*Settings);
 }
